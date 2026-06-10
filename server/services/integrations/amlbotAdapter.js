@@ -1,18 +1,18 @@
 import crypto from "crypto";
 
 /**
- * AMLBot Web API token = md5("{signingKey}:{accessKey}:{accessId}").
- * History signs with the page number (e.g. "1"). Address checks use "address".
- * Transaction and recheck use the hash / uid field value.
+ * AMLBot Web API token = md5("{signingValue}:{accessKey}:{accessId}").
+ * signingValue is always the primary form field's value (not the field name):
+ * history → page number, address → wallet hash, transaction → tx hash, recheck → uid.
  */
-function buildToken(signingKey, accessKey, accessId) {
-  return crypto.createHash("md5").update(`${signingKey}:${accessKey}:${accessId}`).digest("hex");
+function buildToken(signingValue, accessKey, accessId) {
+  return crypto.createHash("md5").update(`${signingValue}:${accessKey}:${accessId}`).digest("hex");
 }
 
-async function postForm(credentials, path, fields, primaryForToken) {
+async function postForm(credentials, path, fields, signingValue) {
   const body = new URLSearchParams({
     accessId: credentials.accessId,
-    token: buildToken(primaryForToken, credentials.accessKey, credentials.accessId),
+    token: buildToken(signingValue, credentials.accessKey, credentials.accessId),
     locale: "en_US",
     ...fields,
   });
@@ -59,49 +59,53 @@ async function postForm(credentials, path, fields, primaryForToken) {
 const TRON_ASSET = "TRX";
 
 export async function amlbotCheckAddress(credentials, { address, flow }) {
+  const walletAddress = String(address);
   return postForm(
     credentials,
     "/",
     {
-      hash: address,
+      hash: walletAddress,
       asset: TRON_ASSET,
       flow: flow || credentials.defaultFlow || "fast",
     },
-    "address",
+    walletAddress,
   );
 }
 
 export async function amlbotInvestigateAddress(credentials, { address }) {
+  const walletAddress = String(address);
   return postForm(
     credentials,
     "/",
     {
-      hash: address,
+      hash: walletAddress,
       asset: TRON_ASSET,
       flow: "advanced",
     },
-    "address",
+    walletAddress,
   );
 }
 
 export async function amlbotCheckTransaction(credentials, { hash, address, direction, flow }) {
+  const txHash = String(hash);
   const dir = direction === "inflow" ? "deposit" : "withdrawal";
   return postForm(
     credentials,
     "/",
     {
-      hash,
-      address,
+      hash: txHash,
+      address: String(address),
       asset: TRON_ASSET,
       direction: dir,
       flow: flow || credentials.defaultFlow || "fast",
     },
-    hash,
+    txHash,
   );
 }
 
 export async function amlbotRecheck(credentials, { uid }) {
-  return postForm(credentials, "/recheck/", { uid }, uid);
+  const uidStr = String(uid);
+  return postForm(credentials, "/recheck/", { uid: uidStr }, uidStr);
 }
 
 export async function amlbotHistory(credentials, { page = 1 }) {

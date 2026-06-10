@@ -2338,8 +2338,15 @@ export const api = createApi({
       query: () => "integrations/configs",
       providesTags: [{ type: "Integration", id: "CONFIGS" }],
     }),
+    getIntegrationConfig: builder.query<
+      import("../types/integrations").IntegrationConfigAdmin,
+      string
+    >({
+      query: (providerId) => `integrations/configs/${providerId}`,
+      providesTags: (_result, _error, providerId) => [{ type: "Integration", id: providerId }],
+    }),
     saveIntegrationConfig: builder.mutation<
-      import("../types/integrations").IntegrationConfigMasked,
+      import("../types/integrations").IntegrationConfigAdmin,
       {
         providerId: string;
         enabled: boolean;
@@ -2352,7 +2359,10 @@ export const api = createApi({
         method: "PUT",
         body,
       }),
-      invalidatesTags: [{ type: "Integration", id: "CONFIGS" }],
+      invalidatesTags: (_result, _error, { providerId }) => [
+        { type: "Integration", id: "CONFIGS" },
+        { type: "Integration", id: providerId },
+      ],
     }),
     testIntegrationConnection: builder.mutation<{ ok: boolean; message: string }, string>({
       query: (providerId) => ({
@@ -2596,6 +2606,7 @@ export const {
   useSendReferenceRatesToTelegramMutation,
   useGetIntegrationProvidersQuery,
   useGetIntegrationConfigsQuery,
+  useGetIntegrationConfigQuery,
   useSaveIntegrationConfigMutation,
   useTestIntegrationConnectionMutation,
   useGetAmlStatusQuery,

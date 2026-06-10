@@ -32,6 +32,10 @@ export interface IntegrationConfigMasked {
   source?: string;
 }
 
+export interface IntegrationConfigAdmin extends IntegrationConfigMasked {
+  secrets: Record<string, string | null>;
+}
+
 export interface AmlSignal {
   key: string;
   label: string;

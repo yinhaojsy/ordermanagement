@@ -1306,7 +1306,13 @@
     "saveError": "无法保存集成。",
     "testSuccess": "连接成功。",
     "testError": "连接测试失败。",
-    "secretConfigured": "密钥已配置"
+    "secretConfigured": "密钥已配置",
+    "showAccessKey": "显示访问密钥",
+    "hideAccessKey": "隐藏访问密钥",
+    "copyAccessKey": "复制访问密钥",
+    "accessKeyCopied": "访问密钥已复制到剪贴板",
+    "copyValue": "复制到剪贴板",
+    "copiedToClipboard": "已复制到剪贴板"
   },
   "aml": {
     "risk": "AML 风险",

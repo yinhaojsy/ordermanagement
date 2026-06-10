@@ -4,6 +4,7 @@ import {
   getIntegrationConfig,
   saveIntegrationConfig,
   maskConfigForClient,
+  formatConfigForAdmin,
 } from "../services/integrations/integrationConfigStore.js";
 import { testAmlConnection } from "../services/integrations/amlService.js";
 
@@ -23,13 +24,13 @@ export const listConfigs = (_req, res) => {
 export const getConfig = (req, res, next) => {
   try {
     const { providerId } = req.params;
-    const config = getIntegrationConfig(providerId);
+    const config = getIntegrationConfig(providerId, { includeSecrets: true });
     if (!config) {
       return res.json(
-        maskConfigForClient({ providerId, enabled: false, config: {}, secrets: {} }),
+        formatConfigForAdmin({ providerId, enabled: false, config: {}, secrets: {} }),
       );
     }
-    res.json(config);
+    res.json(formatConfigForAdmin(config));
   } catch (error) {
     next(error);
   }

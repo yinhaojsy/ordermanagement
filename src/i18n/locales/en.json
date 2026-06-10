@@ -1368,7 +1368,13 @@
     "saveError": "Could not save integration.",
     "testSuccess": "Connection successful.",
     "testError": "Connection test failed.",
-    "secretConfigured": "Secret configured"
+    "secretConfigured": "Secret configured",
+    "showAccessKey": "Show access key",
+    "hideAccessKey": "Hide access key",
+    "copyAccessKey": "Copy access key",
+    "accessKeyCopied": "Access key copied to clipboard",
+    "copyValue": "Copy to clipboard",
+    "copiedToClipboard": "Copied to clipboard"
   },
   "aml": {
     "risk": "AML Risk",

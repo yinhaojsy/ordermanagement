@@ -89,6 +89,21 @@ export function maskConfigForClient(record) {
   };
 }
 
+/** Admin configure view: masked metadata plus full secret values for editing. */
+export function formatConfigForAdmin(record) {
+  const masked = maskConfigForClient(record);
+  if (!masked) return null;
+  const def = getProviderDef(record.providerId);
+  const secrets = {};
+  for (const field of def?.fields || []) {
+    if (field.type === "password") {
+      const val = record.secrets?.[field.key];
+      secrets[field.key] = val && typeof val === "string" ? val : null;
+    }
+  }
+  return { ...masked, secrets };
+}
+
 export function getIntegrationConfig(providerId, { includeSecrets = false } = {}) {
   const row = db.prepare("SELECT * FROM integration_configs WHERE providerId = ?").get(providerId);
   const fromDb = parseRow(row);
@@ -241,7 +256,7 @@ export function saveIntegrationConfig(providerId, { enabled, config, secrets, us
     });
   }
 
-  return maskConfigForClient(parseRow(db.prepare("SELECT * FROM integration_configs WHERE providerId = ?").get(providerId)));
+  return formatConfigForAdmin(parseRow(db.prepare("SELECT * FROM integration_configs WHERE providerId = ?").get(providerId)));
 }
 
 export function isAmlIntegrationEnabled() {
