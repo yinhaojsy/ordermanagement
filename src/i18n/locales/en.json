@@ -1395,6 +1395,7 @@
     "showHistory": "AML history",
     "hideHistory": "Hide history",
     "historyTitle": "Screening history",
+    "historyHint": "Past screenings saved in this app for this wallet.",
     "noHistory": "No screenings yet for this wallet.",
     "actionFailed": "AML check failed."
   },

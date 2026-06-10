@@ -1,4 +1,4 @@
-import { useState, type FormEvent, useEffect } from "react";
+import { useState, type FormEvent, useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import Badge from "../components/common/Badge";
 import SectionCard from "../components/common/SectionCard";
@@ -30,6 +30,10 @@ import { hasActionPermission } from "../utils/permissions";
 import AmlRiskBadge from "../components/aml/AmlRiskBadge";
 import AmlReportModal from "../components/aml/AmlReportModal";
 import type { AmlCheck } from "../types/integrations";
+
+function asAmlCheckList(value: unknown): AmlCheck[] {
+  return Array.isArray(value) ? value : [];
+}
 
 // Helper function to format currency
 const formatCurrency = (amount: number) => {
@@ -109,6 +113,11 @@ export default function WalletTrackerPage() {
   const [amlReportSubtitle, setAmlReportSubtitle] = useState("");
   const [showAmlHistory, setShowAmlHistory] = useState(false);
   const [amlActionLoading, setAmlActionLoading] = useState<string | null>(null);
+
+  const walletAmlHistoryItems = useMemo(
+    () => asAmlCheckList(walletAmlHistoryData?.history),
+    [walletAmlHistoryData],
+  );
 
   const resetForm = () => {
     setForm({
@@ -751,7 +760,15 @@ export default function WalletTrackerPage() {
                 {amlStatus?.enabled ? (
                   <button
                     type="button"
-                    onClick={() => setShowAmlHistory((v) => !v)}
+                    onClick={() => {
+                      setShowAmlHistory((v) => {
+                        const next = !v;
+                        if (next && transactionsModalWalletId) {
+                          refetchWalletAmlHistory();
+                        }
+                        return next;
+                      });
+                    }}
                     className="px-3 py-1 text-sm rounded border border-slate-300 text-slate-700 hover:bg-slate-50"
                   >
                     {showAmlHistory ? t("aml.hideHistory") : t("aml.showHistory")}
@@ -792,12 +809,13 @@ export default function WalletTrackerPage() {
 
             {showAmlHistory && amlStatus?.enabled ? (
               <div className="mb-4 rounded-lg border border-slate-200 p-3">
-                <h3 className="mb-2 text-sm font-semibold text-slate-800">{t("aml.historyTitle")}</h3>
-                {(walletAmlHistoryData?.history || []).length === 0 ? (
+                <h3 className="mb-1 text-sm font-semibold text-slate-800">{t("aml.historyTitle")}</h3>
+                <p className="mb-2 text-xs text-slate-500">{t("aml.historyHint")}</p>
+                {walletAmlHistoryItems.length === 0 ? (
                   <p className="text-sm text-slate-500">{t("aml.noHistory")}</p>
                 ) : (
                   <div className="max-h-40 space-y-2 overflow-y-auto text-sm">
-                    {(walletAmlHistoryData?.history || []).map((item) => (
+                    {walletAmlHistoryItems.map((item) => (
                       <button
                         key={item.id}
                         type="button"

@@ -138,6 +138,9 @@ export function formatCheckRow(row) {
   } catch {
     signals = [];
   }
+  if (!Array.isArray(signals)) {
+    signals = [];
+  }
   return {
     id: row.id,
     walletId: row.walletId,

@@ -54,6 +54,7 @@ export default function AmlReportModal({
 
   if (!isOpen || !localCheck) return null;
 
+  const signals = Array.isArray(localCheck.signals) ? localCheck.signals : [];
   const tone = gaugeTone(localCheck);
   const toneColors: Record<Tone, string> = {
     emerald: "text-emerald-600 border-emerald-200 bg-emerald-50",
@@ -130,11 +131,11 @@ export default function AmlReportModal({
           </div>
         </div>
 
-        {localCheck.signals.length > 0 ? (
+        {signals.length > 0 ? (
           <div className="mb-6">
             <h3 className="mb-3 text-sm font-semibold text-slate-800">{t("aml.signalsTitle")}</h3>
             <div className="space-y-2">
-              {localCheck.signals.map((signal) => (
+              {signals.map((signal) => (
                 <div key={signal.key}>
                   <div className="mb-1 flex justify-between text-xs text-slate-600">
                     <span>{signal.label}</span>

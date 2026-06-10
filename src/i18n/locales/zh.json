@@ -1333,6 +1333,7 @@
     "showHistory": "筛查历史",
     "hideHistory": "隐藏历史",
     "historyTitle": "筛查历史",
+    "historyHint": "本应用中该钱包已保存的筛查记录。",
     "noHistory": "此钱包暂无筛查记录。",
     "actionFailed": "AML 检查失败。"
   },
