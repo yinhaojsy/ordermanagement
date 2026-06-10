@@ -131,14 +131,12 @@ function ProviderConfigureModal({
   const handleTest = async () => {
     setMessage(null);
     try {
-      if (accessKey.trim() || !saved?.secretsMeta?.accessKey) {
-        await saveConfig({
-          providerId: provider.id,
-          enabled: true,
-          config,
-          secrets: accessKey.trim() ? { accessKey: accessKey.trim() } : {},
-        }).unwrap();
-      }
+      await saveConfig({
+        providerId: provider.id,
+        enabled,
+        config,
+        secrets: accessKey.trim() ? { accessKey: accessKey.trim() } : {},
+      }).unwrap();
       const result = await testConnection(provider.id).unwrap();
       setMessage({ text: result.message || t("integrations.testSuccess"), type: "success" });
     } catch (err: any) {

@@ -63,8 +63,12 @@ export const testProviderConnection = async (req, res, next) => {
     const result = await testAmlConnection();
     res.json(result);
   } catch (error) {
-    if (error.statusCode === 400 || error.statusCode === 503) {
-      return res.status(error.statusCode).json({ message: error.message });
+    const status = error.statusCode;
+    if (status && status >= 400 && status < 500) {
+      return res.status(status).json({ message: error.message });
+    }
+    if (status === 503) {
+      return res.status(503).json({ message: error.message });
     }
     next(error);
   }

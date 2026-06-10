@@ -1,5 +1,5 @@
 import { db } from "../../db.js";
-import { getActiveAmlCredentials } from "./integrationConfigStore.js";
+import { getActiveAmlCredentials, getAmlbotCredentialsForTest } from "./integrationConfigStore.js";
 import * as amlbot from "./amlbotAdapter.js";
 
 const SIGNAL_LABELS = {
@@ -353,9 +353,12 @@ export async function autoScreenNewTransaction(walletId, transactionId, userId) 
 }
 
 export async function testAmlConnection() {
-  const creds = getActiveAmlCredentials();
+  const creds = getAmlbotCredentialsForTest();
   if (!creds) {
-    throw Object.assign(new Error("AML integration is not configured or disabled"), { statusCode: 400 });
+    throw Object.assign(
+      new Error("AMLBot Access ID and Access Key are required. Save credentials first."),
+      { statusCode: 400 },
+    );
   }
   await amlbot.amlbotTestConnection(creds);
   return { ok: true, message: "AMLBot connection successful" };

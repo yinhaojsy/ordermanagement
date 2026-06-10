@@ -100,6 +100,22 @@ export function getIntegrationConfig(providerId, { includeSecrets = false } = {}
   return includeSecrets ? envCfg : maskConfigForClient(envCfg);
 }
 
+export function getAmlbotCredentialsForTest() {
+  const full = getFullCredentials("amlbot");
+  if (!full) return null;
+  const { accessId, accessKey, apiUrl, defaultFlow, requestTimeoutMs, riskThresholdPercent } = full;
+  if (!accessId || !accessKey || !apiUrl) return null;
+  return {
+    providerId: "amlbot",
+    accessId,
+    accessKey,
+    apiUrl: apiUrl.replace(/\/$/, ""),
+    defaultFlow: defaultFlow || "fast",
+    requestTimeoutMs: Number(requestTimeoutMs) || 15000,
+    riskThresholdPercent: Number(riskThresholdPercent) || 50,
+  };
+}
+
 export function getActiveAmlCredentials() {
   const full = getFullCredentials("amlbot");
   if (!full || !full.enabled) return null;
