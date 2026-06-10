@@ -648,6 +648,8 @@ export const clearDatabase = (req, res, next) => {
       "expenses",
       "transfer_changes",
       "internal_transfers",
+      "aml_checks",
+      "integration_configs",
       "tron_wallet_transactions",
       "tron_wallets",
       "orders",

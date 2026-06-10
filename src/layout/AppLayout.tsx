@@ -498,6 +498,7 @@ export default function AppLayout() {
     if (pathname === "/" || pathname === "") return t("nav.dashboard");
     if (pathname === "/profile" || pathname === "/preferences") return t("nav.profile");
     if (pathname.startsWith("/customers/settings")) return t("customerSettings.pageTitle");
+    if (pathname.startsWith("/settings/integrations")) return t("integrations.title");
     if (pathname === "/customers") return t("nav.customerList");
     if (pathname.startsWith("/customers/")) return t("customers.title");
 

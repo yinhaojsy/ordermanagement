@@ -115,7 +115,7 @@ function customerLedgerTagsForCustomer(customerId: number) {
 export const api = createApi({
   reducerPath: "api",
   baseQuery,
-  tagTypes: ["Currency", "Customer", "CustomerBeneficiary", "CustomerLedger", "CustomerKyc", "User", "Role", "Order", "Auth", "Account", "Transfer", "Expense", "ProfitCalculation", "Setting", "PublicBranding", "Tag", "Notification", "Wallet", "ReferenceRates"],
+  tagTypes: ["Currency", "Customer", "CustomerBeneficiary", "CustomerLedger", "CustomerKyc", "User", "Role", "Order", "Auth", "Account", "Transfer", "Expense", "ProfitCalculation", "Setting", "PublicBranding", "Tag", "Notification", "Wallet", "ReferenceRates", "Integration", "AmlCheck"],
   refetchOnReconnect: true,
   endpoints: (builder) => ({
     getCurrencies: builder.query<Currency[], void>({
@@ -2329,6 +2329,103 @@ export const api = createApi({
         method: "POST",
       }),
     }),
+
+    getIntegrationProviders: builder.query<{ providers: import("../types/integrations").IntegrationProviderDef[] }, void>({
+      query: () => "integrations/providers",
+      providesTags: [{ type: "Integration", id: "PROVIDERS" }],
+    }),
+    getIntegrationConfigs: builder.query<{ configs: import("../types/integrations").IntegrationConfigMasked[] }, void>({
+      query: () => "integrations/configs",
+      providesTags: [{ type: "Integration", id: "CONFIGS" }],
+    }),
+    saveIntegrationConfig: builder.mutation<
+      import("../types/integrations").IntegrationConfigMasked,
+      {
+        providerId: string;
+        enabled: boolean;
+        config: Record<string, string>;
+        secrets?: Record<string, string>;
+      }
+    >({
+      query: ({ providerId, ...body }) => ({
+        url: `integrations/configs/${providerId}`,
+        method: "PUT",
+        body,
+      }),
+      invalidatesTags: [{ type: "Integration", id: "CONFIGS" }],
+    }),
+    testIntegrationConnection: builder.mutation<{ ok: boolean; message: string }, string>({
+      query: (providerId) => ({
+        url: `integrations/configs/${providerId}/test`,
+        method: "POST",
+      }),
+    }),
+
+    getAmlStatus: builder.query<{ enabled: boolean }, void>({
+      query: () => "wallets/aml/status",
+    }),
+    getWalletAmlSummaries: builder.query<{ summaries: Record<number, import("../types/integrations").AmlCheck> }, void>({
+      query: () => "wallets/aml/summaries",
+      providesTags: [{ type: "AmlCheck", id: "WALLET_SUMMARIES" }],
+    }),
+    getWalletTransactionAmlSummaries: builder.query<
+      { summaries: Record<number, import("../types/integrations").AmlCheck> },
+      number
+    >({
+      query: (walletId) => `wallets/${walletId}/aml/transactions`,
+      providesTags: (_r, _e, walletId) => [{ type: "AmlCheck", id: `TX_SUMMARIES_${walletId}` }],
+    }),
+    getWalletAmlHistory: builder.query<{ history: import("../types/integrations").AmlCheck[] }, number>({
+      query: (walletId) => `wallets/${walletId}/aml/history`,
+      providesTags: (_r, _e, walletId) => [{ type: "AmlCheck", id: `HISTORY_${walletId}` }],
+    }),
+    checkWalletAddressAml: builder.mutation<{ check: import("../types/integrations").AmlCheck }, number>({
+      query: (walletId) => ({
+        url: `wallets/${walletId}/aml/check-address`,
+        method: "POST",
+        body: {},
+      }),
+      invalidatesTags: [
+        { type: "AmlCheck", id: "WALLET_SUMMARIES" },
+        (_r, _e, walletId) => ({ type: "AmlCheck", id: `HISTORY_${walletId}` }),
+      ],
+    }),
+    investigateWalletAddressAml: builder.mutation<{ check: import("../types/integrations").AmlCheck }, number>({
+      query: (walletId) => ({
+        url: `wallets/${walletId}/aml/investigate-address`,
+        method: "POST",
+        body: {},
+      }),
+      invalidatesTags: [
+        { type: "AmlCheck", id: "WALLET_SUMMARIES" },
+        (_r, _e, walletId) => ({ type: "AmlCheck", id: `HISTORY_${walletId}` }),
+      ],
+    }),
+    checkWalletTransactionAml: builder.mutation<
+      { check: import("../types/integrations").AmlCheck },
+      { walletId: number; txId: number }
+    >({
+      query: ({ walletId, txId }) => ({
+        url: `wallets/${walletId}/transactions/${txId}/aml/check`,
+        method: "POST",
+        body: {},
+      }),
+      invalidatesTags: (_r, _e, { walletId }) => [
+        { type: "AmlCheck", id: `TX_SUMMARIES_${walletId}` },
+        { type: "AmlCheck", id: `HISTORY_${walletId}` },
+      ],
+    }),
+    recheckAml: builder.mutation<
+      { check: import("../types/integrations").AmlCheck },
+      { checkId?: number; uid?: string }
+    >({
+      query: (body) => ({
+        url: "wallets/aml/recheck",
+        method: "POST",
+        body,
+      }),
+      invalidatesTags: [{ type: "AmlCheck", id: "WALLET_SUMMARIES" }],
+    }),
   }),
 });
 
@@ -2497,6 +2594,18 @@ export const {
   useGetReferenceRatesQuery,
   useUpdateReferenceRatesMutation,
   useSendReferenceRatesToTelegramMutation,
+  useGetIntegrationProvidersQuery,
+  useGetIntegrationConfigsQuery,
+  useSaveIntegrationConfigMutation,
+  useTestIntegrationConnectionMutation,
+  useGetAmlStatusQuery,
+  useGetWalletAmlSummariesQuery,
+  useGetWalletTransactionAmlSummariesQuery,
+  useGetWalletAmlHistoryQuery,
+  useCheckWalletAddressAmlMutation,
+  useInvestigateWalletAddressAmlMutation,
+  useCheckWalletTransactionAmlMutation,
+  useRecheckAmlMutation,
 } = api;
 
 

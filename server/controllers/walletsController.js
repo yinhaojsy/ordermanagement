@@ -1,5 +1,9 @@
 import { db } from "../db.js";
 import { createNotificationForAllUsers } from "./notificationsController.js";
+import {
+  autoScreenNewWallet,
+  autoScreenNewTransaction,
+} from "../services/integrations/amlService.js";
 
 // TronScan API configuration
 // If API key is provided, use authenticated TronScan as primary (100K requests/day)
@@ -291,7 +295,7 @@ export const createWallet = async (req, res, next) => {
       );
 
       for (const tx of transactions) {
-        insertTx.run(
+        const txResult = insertTx.run(
           result.lastInsertRowid,
           tx.transactionHash,
           tx.transactionType,
@@ -302,10 +306,19 @@ export const createWallet = async (req, res, next) => {
           tx.blockNumber,
           new Date().toISOString()
         );
+        if (txResult.changes > 0) {
+          autoScreenNewTransaction(result.lastInsertRowid, txResult.lastInsertRowid, req.user?.id).catch(
+            (err) => console.error("AML auto-screen initial tx failed:", err.message),
+          );
+        }
       }
     } catch (error) {
       console.error("Failed to fetch initial transactions:", error);
     }
+
+    autoScreenNewWallet(result.lastInsertRowid, req.user?.id).catch((err) =>
+      console.error("AML auto-screen new wallet failed:", err.message),
+    );
 
     res.status(201).json(wallet);
   } catch (error) {
@@ -451,6 +464,10 @@ export const getWalletTransactions = async (req, res, next) => {
               entityId: parseInt(id),
               actionUrl: `/wallets`,
             });
+
+            autoScreenNewTransaction(parseInt(id, 10), result.lastInsertRowid, req.user?.id).catch((err) =>
+              console.error("AML auto-screen tx failed:", err.message),
+            );
           }
         }
 
@@ -532,6 +549,10 @@ export const refreshAllWallets = async (req, res, next) => {
               entityId: wallet.id,
               actionUrl: `/wallets`,
             });
+
+            autoScreenNewTransaction(wallet.id, result.lastInsertRowid, req.user?.id).catch((err) =>
+              console.error("AML auto-screen tx failed:", err.message),
+            );
           }
         }
 

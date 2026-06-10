@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import SectionCard from "../components/common/SectionCard";
 import ConfirmModal from "../components/common/ConfirmModal";
@@ -382,6 +383,18 @@ export default function SettingsPage() {
 
   return (
     <div className="space-y-6">
+      <SectionCard
+        title={t("integrations.title")}
+        description={t("integrations.settingsDescription")}
+      >
+        <Link
+          to="/settings/integrations"
+          className="inline-flex items-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
+        >
+          {t("integrations.manage")}
+        </Link>
+      </SectionCard>
+
       <SectionCard
         title={t("settings.appBranding.title")}
         description={t("settings.appBranding.description")}

@@ -18,6 +18,7 @@ import LoginPage from "../pages/LoginPage";
 import ForgotPasswordPage from "../pages/ForgotPasswordPage";
 import ProfitCalculationPage from "../pages/ProfitCalculationPage";
 import SettingsPage from "../pages/SettingsPage";
+import IntegrationsPage from "../pages/IntegrationsPage";
 import NotificationsPage from "../pages/NotificationsPage";
 import NotificationPreferencesPage from "../pages/NotificationPreferencesPage";
 import ProfilePage from "../pages/ProfilePage";
@@ -147,6 +148,7 @@ export default function AppRoutes() {
             }
           />
           <Route path="settings" element={<RequireAdmin><SettingsPage /></RequireAdmin>} />
+          <Route path="settings/integrations" element={<RequireAdmin><IntegrationsPage /></RequireAdmin>} />
         </Route>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />

@@ -199,6 +199,25 @@ import {
   startPolling,
   getPollingStatus,
 } from "../controllers/walletsController.js";
+import {
+  listProviders,
+  listConfigs,
+  getConfig,
+  putConfig,
+  testProviderConnection,
+} from "../controllers/integrationsController.js";
+import {
+  getAmlStatus,
+  getWalletAmlSummariesHandler,
+  getWalletTransactionAmlSummaries,
+  postCheckAddress,
+  postInvestigateAddress,
+  postCheckTransaction,
+  postRecheck,
+  getWalletHistory,
+  getAmlHistory,
+  getAmlCheck,
+} from "../controllers/walletAmlController.js";
 import { serveUpload } from "../controllers/uploadsController.js";
 import {
   authenticate,
@@ -480,17 +499,32 @@ protectedRouter.delete("/notifications/:id", deleteNotification);
 protectedRouter.get("/notifications/preferences", getPreferences);
 protectedRouter.put("/notifications/preferences", updatePreferences);
 
+protectedRouter.get("/integrations/providers", requireAdmin, listProviders);
+protectedRouter.get("/integrations/configs", requireAdmin, listConfigs);
+protectedRouter.get("/integrations/configs/:providerId", requireAdmin, getConfig);
+protectedRouter.put("/integrations/configs/:providerId", requireAdmin, putConfig);
+protectedRouter.post("/integrations/configs/:providerId/test", requireAdmin, testProviderConnection);
+
 protectedRouter.get("/wallets", section("wallets"), listWallets);
 protectedRouter.get("/wallets/summary", section("wallets"), getWalletsSummary);
+protectedRouter.get("/wallets/aml/status", section("wallets"), getAmlStatus);
+protectedRouter.get("/wallets/aml/summaries", section("wallets"), getWalletAmlSummariesHandler);
+protectedRouter.get("/wallets/aml/history", section("wallets"), getAmlHistory);
+protectedRouter.get("/wallets/aml/checks/:checkId", section("wallets"), getAmlCheck);
+protectedRouter.post("/wallets/aml/recheck", section("wallets"), postRecheck);
+protectedRouter.get("/wallets/polling/status", section("wallets"), getPollingStatus);
+protectedRouter.post("/wallets/polling/stop", requireAdmin, stopPolling);
+protectedRouter.post("/wallets/polling/start", requireAdmin, startPolling);
 protectedRouter.post("/wallets", section("wallets"), action("createWallet"), createWallet);
 protectedRouter.put("/wallets/:id", section("wallets"), action("updateWallet"), updateWallet);
 protectedRouter.delete("/wallets/:id", section("wallets"), action("deleteWallet"), deleteWallet);
 protectedRouter.post("/wallets/:id/refresh", section("wallets"), refreshWalletBalance);
+protectedRouter.get("/wallets/:id/aml/history", section("wallets"), getWalletHistory);
+protectedRouter.get("/wallets/:id/aml/transactions", section("wallets"), getWalletTransactionAmlSummaries);
+protectedRouter.post("/wallets/:id/aml/check-address", section("wallets"), postCheckAddress);
+protectedRouter.post("/wallets/:id/aml/investigate-address", section("wallets"), postInvestigateAddress);
+protectedRouter.post("/wallets/:id/transactions/:txId/aml/check", section("wallets"), postCheckTransaction);
 protectedRouter.get("/wallets/:id/transactions", section("wallets"), getWalletTransactions);
-
-protectedRouter.get("/wallets/polling/status", section("wallets"), getPollingStatus);
-protectedRouter.post("/wallets/polling/stop", requireAdmin, stopPolling);
-protectedRouter.post("/wallets/polling/start", requireAdmin, startPolling);
 
 router.use(protectedRouter);
 

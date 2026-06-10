@@ -16,10 +16,20 @@ import {
   useGetPollingStatusQuery,
   useStopWalletPollingMutation,
   useStartWalletPollingMutation,
+  useGetAmlStatusQuery,
+  useGetWalletAmlSummariesQuery,
+  useGetWalletTransactionAmlSummariesQuery,
+  useGetWalletAmlHistoryQuery,
+  useCheckWalletAddressAmlMutation,
+  useInvestigateWalletAddressAmlMutation,
+  useCheckWalletTransactionAmlMutation,
 } from "../services/api";
 import { formatDate } from "../utils/format";
 import { useAppSelector } from "../app/hooks";
 import { hasActionPermission } from "../utils/permissions";
+import AmlRiskBadge from "../components/aml/AmlRiskBadge";
+import AmlReportModal from "../components/aml/AmlReportModal";
+import type { AmlCheck } from "../types/integrations";
 
 // Helper function to format currency
 const formatCurrency = (amount: number) => {
@@ -78,6 +88,27 @@ export default function WalletTrackerPage() {
     walletAddress: "",
     remarks: "",
   });
+
+  const { data: amlStatus } = useGetAmlStatusQuery();
+  const { data: amlSummariesData, refetch: refetchAmlSummaries } = useGetWalletAmlSummariesQuery(undefined, {
+    skip: !amlStatus?.enabled,
+  });
+  const { data: txAmlSummariesData, refetch: refetchTxAmlSummaries } = useGetWalletTransactionAmlSummariesQuery(
+    transactionsModalWalletId || 0,
+    { skip: !transactionsModalWalletId || !amlStatus?.enabled },
+  );
+  const { data: walletAmlHistoryData, refetch: refetchWalletAmlHistory } = useGetWalletAmlHistoryQuery(
+    transactionsModalWalletId || 0,
+    { skip: !transactionsModalWalletId || !amlStatus?.enabled },
+  );
+  const [checkAddressAml] = useCheckWalletAddressAmlMutation();
+  const [investigateAddressAml] = useInvestigateWalletAddressAmlMutation();
+  const [checkTransactionAml] = useCheckWalletTransactionAmlMutation();
+
+  const [amlReportCheck, setAmlReportCheck] = useState<AmlCheck | null>(null);
+  const [amlReportSubtitle, setAmlReportSubtitle] = useState("");
+  const [showAmlHistory, setShowAmlHistory] = useState(false);
+  const [amlActionLoading, setAmlActionLoading] = useState<string | null>(null);
 
   const resetForm = () => {
     setForm({
@@ -268,6 +299,9 @@ export default function WalletTrackerPage() {
     if (!transactionsModalWalletId) return;
     try {
       await refetchTransactions();
+      if (amlStatus?.enabled) {
+        await refetchTxAmlSummaries();
+      }
       setAlertModal({
         isOpen: true,
         message: t("wallets.transactionsRefreshed") || "Transactions refreshed successfully",
@@ -279,6 +313,45 @@ export default function WalletTrackerPage() {
         message: error?.data?.message || t("wallets.errorRefreshingTransactions") || "Error refreshing transactions",
         type: "error",
       });
+    }
+  };
+
+  const showAmlError = (error: any) => {
+    setAlertModal({
+      isOpen: true,
+      message: error?.data?.message || t("aml.actionFailed"),
+      type: "error",
+    });
+  };
+
+  const openAmlReport = (check: AmlCheck, subtitle: string) => {
+    setAmlReportCheck(check);
+    setAmlReportSubtitle(subtitle);
+  };
+
+  const handleAmlCheckUpdated = (check: AmlCheck) => {
+    setAmlReportCheck(check);
+    refetchAmlSummaries();
+    if (transactionsModalWalletId) {
+      refetchTxAmlSummaries();
+      refetchWalletAmlHistory();
+    }
+  };
+
+  const runAmlAction = async (key: string, action: () => Promise<{ check: AmlCheck }>, subtitle: string) => {
+    setAmlActionLoading(key);
+    try {
+      const result = await action();
+      openAmlReport(result.check, subtitle);
+      await refetchAmlSummaries();
+      if (transactionsModalWalletId) {
+        await refetchTxAmlSummaries();
+        await refetchWalletAmlHistory();
+      }
+    } catch (error: any) {
+      showAmlError(error);
+    } finally {
+      setAmlActionLoading(null);
     }
   };
 
@@ -429,6 +502,9 @@ export default function WalletTrackerPage() {
                   <th className="py-3 px-2">{t("wallets.currentBalance") || "Current USDT Balance"}</th>
                   <th className="py-3 px-2">{t("wallets.walletAddress") || "Wallet Address"}</th>
                   <th className="py-3 px-2">{t("wallets.remarks") || "Remarks"}</th>
+                  {amlStatus?.enabled ? (
+                    <th className="py-3 px-2">{t("aml.risk")}</th>
+                  ) : null}
                   <th className="py-3 px-2">{t("wallets.actions") || "Actions"}</th>
                 </tr>
               </thead>
@@ -477,8 +553,26 @@ export default function WalletTrackerPage() {
                     <td className="py-3 px-2 text-slate-600 max-w-xs truncate">
                       {wallet.remarks || "-"}
                     </td>
+                    {amlStatus?.enabled ? (
+                      <td className="py-3 px-2">
+                        <button
+                          type="button"
+                          className="inline-flex"
+                          onClick={() => {
+                            const check = amlSummariesData?.summaries?.[wallet.id];
+                            if (check) openAmlReport(check, wallet.walletAddress);
+                          }}
+                        >
+                          <AmlRiskBadge
+                            check={amlSummariesData?.summaries?.[wallet.id]}
+                            notScreenedLabel={t("aml.notScreened")}
+                            screeningLabel={t("aml.screening")}
+                          />
+                        </button>
+                      </td>
+                    ) : null}
                     <td className="py-3 px-2">
-                      <div className="flex gap-2 text-sm">
+                      <div className="flex flex-wrap gap-2 text-sm">
                         {hasActionPermission(authUser, "updateWallet") && (
                           <>
                             <button
@@ -503,6 +597,36 @@ export default function WalletTrackerPage() {
                             {t("wallets.logs") || "Logs"}
                           </button>
                         )}
+                        {amlStatus?.enabled ? (
+                          <>
+                            <button
+                              className="text-indigo-600 hover:text-indigo-700 disabled:opacity-50"
+                              disabled={amlActionLoading === `screen-${wallet.id}`}
+                              onClick={() =>
+                                runAmlAction(
+                                  `screen-${wallet.id}`,
+                                  () => checkAddressAml(wallet.id).unwrap(),
+                                  wallet.walletAddress,
+                                )
+                              }
+                            >
+                              {t("aml.screen")}
+                            </button>
+                            <button
+                              className="text-violet-600 hover:text-violet-700 disabled:opacity-50"
+                              disabled={amlActionLoading === `investigate-${wallet.id}`}
+                              onClick={() =>
+                                runAmlAction(
+                                  `investigate-${wallet.id}`,
+                                  () => investigateAddressAml(wallet.id).unwrap(),
+                                  wallet.walletAddress,
+                                )
+                              }
+                            >
+                              {t("aml.investigate")}
+                            </button>
+                          </>
+                        ) : null}
                         {hasActionPermission(authUser, "deleteWallet") && (
                           <button
                             className="text-rose-600 hover:text-rose-700"
@@ -624,6 +748,15 @@ export default function WalletTrackerPage() {
                 </p>
               </div>
               <div className="flex items-center gap-2">
+                {amlStatus?.enabled ? (
+                  <button
+                    type="button"
+                    onClick={() => setShowAmlHistory((v) => !v)}
+                    className="px-3 py-1 text-sm rounded border border-slate-300 text-slate-700 hover:bg-slate-50"
+                  >
+                    {showAmlHistory ? t("aml.hideHistory") : t("aml.showHistory")}
+                  </button>
+                ) : null}
                 <button
                   onClick={handleRefreshTransactions}
                   className="px-3 py-1 text-sm rounded bg-blue-600 text-white hover:bg-blue-700 transition-colors"
@@ -657,6 +790,29 @@ export default function WalletTrackerPage() {
               )}
             </div>
 
+            {showAmlHistory && amlStatus?.enabled ? (
+              <div className="mb-4 rounded-lg border border-slate-200 p-3">
+                <h3 className="mb-2 text-sm font-semibold text-slate-800">{t("aml.historyTitle")}</h3>
+                {(walletAmlHistoryData?.history || []).length === 0 ? (
+                  <p className="text-sm text-slate-500">{t("aml.noHistory")}</p>
+                ) : (
+                  <div className="max-h-40 space-y-2 overflow-y-auto text-sm">
+                    {(walletAmlHistoryData?.history || []).map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        className="flex w-full items-center justify-between rounded border border-slate-100 px-2 py-1 text-left hover:bg-slate-50"
+                        onClick={() => openAmlReport(item, selectedWallet.walletAddress)}
+                      >
+                        <span className="text-slate-600">{formatDate(item.createdAt)} · {item.checkType}</span>
+                        <AmlRiskBadge check={item} notScreenedLabel="—" screeningLabel={t("aml.screening")} />
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : null}
+
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm">
                 <thead>
@@ -666,6 +822,8 @@ export default function WalletTrackerPage() {
                     <th className="py-2 px-2">{t("wallets.amount") || "Amount"}</th>
                     <th className="py-2 px-2">{t("wallets.fromTo") || "From/To"}</th>
                     <th className="py-2 px-2">{t("wallets.txHash") || "Transaction Hash"}</th>
+                    {amlStatus?.enabled ? <th className="py-2 px-2">{t("aml.risk")}</th> : null}
+                    {amlStatus?.enabled ? <th className="py-2 px-2">{t("wallets.actions")}</th> : null}
                   </tr>
                 </thead>
                 <tbody>
@@ -724,11 +882,53 @@ export default function WalletTrackerPage() {
                           </svg>
                         </a>
                       </td>
+                      {amlStatus?.enabled ? (
+                        <td className="py-2 px-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const check = txAmlSummariesData?.summaries?.[tx.id];
+                              if (check) openAmlReport(check, tx.transactionHash);
+                            }}
+                          >
+                            <AmlRiskBadge
+                              check={txAmlSummariesData?.summaries?.[tx.id]}
+                              notScreenedLabel={t("aml.notScreened")}
+                              screeningLabel={t("aml.screening")}
+                            />
+                          </button>
+                        </td>
+                      ) : null}
+                      {amlStatus?.enabled && transactionsModalWalletId ? (
+                        <td className="py-2 px-2">
+                          <button
+                            type="button"
+                            className="text-indigo-600 hover:text-indigo-700 disabled:opacity-50"
+                            disabled={amlActionLoading === `tx-${tx.id}`}
+                            onClick={() =>
+                              runAmlAction(
+                                `tx-${tx.id}`,
+                                () =>
+                                  checkTransactionAml({
+                                    walletId: transactionsModalWalletId,
+                                    txId: tx.id,
+                                  }).unwrap(),
+                                tx.transactionHash,
+                              )
+                            }
+                          >
+                            {t("aml.screenTx")}
+                          </button>
+                        </td>
+                      ) : null}
                     </tr>
                   ))}
                   {transactions.length === 0 && (
                     <tr>
-                      <td className="py-8 text-sm text-slate-500 text-center" colSpan={5}>
+                      <td
+                        className="py-8 text-sm text-slate-500 text-center"
+                        colSpan={amlStatus?.enabled ? 7 : 5}
+                      >
                         {t("wallets.noTransactions") || "No transactions found"}
                       </td>
                     </tr>
@@ -745,6 +945,14 @@ export default function WalletTrackerPage() {
         message={alertModal.message}
         type={alertModal.type || "error"}
         onClose={() => setAlertModal({ isOpen: false, message: "", type: "error" })}
+      />
+
+      <AmlReportModal
+        isOpen={!!amlReportCheck}
+        onClose={() => setAmlReportCheck(null)}
+        check={amlReportCheck}
+        subtitle={amlReportSubtitle}
+        onCheckUpdated={handleAmlCheckUpdated}
       />
 
       <ConfirmModal

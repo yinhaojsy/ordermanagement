@@ -711,6 +711,49 @@ const ensureSchema = () => {
      ON tron_wallet_transactions(timestamp DESC);`,
   ).run();
 
+  db.prepare(
+    `CREATE TABLE IF NOT EXISTS integration_configs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      providerId TEXT NOT NULL UNIQUE,
+      enabled INTEGER NOT NULL DEFAULT 0,
+      configJson TEXT NOT NULL DEFAULT '{}',
+      secretsJson TEXT NOT NULL DEFAULT '{}',
+      updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updatedByUserId INTEGER,
+      FOREIGN KEY(updatedByUserId) REFERENCES users(id)
+    );`,
+  ).run();
+
+  db.prepare(
+    `CREATE TABLE IF NOT EXISTS aml_checks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      walletId INTEGER NOT NULL,
+      transactionId INTEGER,
+      providerId TEXT NOT NULL,
+      checkType TEXT NOT NULL CHECK(checkType IN ('address', 'address_investigation', 'transaction')),
+      externalUid TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      riskPercent REAL,
+      riskLevel TEXT,
+      isBlacklisted INTEGER NOT NULL DEFAULT 0,
+      signalsJson TEXT,
+      rawResponseJson TEXT NOT NULL DEFAULT '{}',
+      createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      createdByUserId INTEGER,
+      FOREIGN KEY(walletId) REFERENCES tron_wallets(id) ON DELETE CASCADE,
+      FOREIGN KEY(transactionId) REFERENCES tron_wallet_transactions(id) ON DELETE SET NULL,
+      FOREIGN KEY(createdByUserId) REFERENCES users(id)
+    );`,
+  ).run();
+
+  db.prepare(
+    `CREATE INDEX IF NOT EXISTS idx_aml_checks_walletId ON aml_checks(walletId);`,
+  ).run();
+
+  db.prepare(
+    `CREATE INDEX IF NOT EXISTS idx_aml_checks_transactionId ON aml_checks(transactionId);`,
+  ).run();
+
   // Create indexes for better performance
   db.prepare(
     `CREATE INDEX IF NOT EXISTS idx_notifications_user 
