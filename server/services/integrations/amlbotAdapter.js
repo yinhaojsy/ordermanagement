@@ -2,9 +2,8 @@ import crypto from "crypto";
 
 /**
  * AMLBot Web API token = md5("{signingKey}:{accessKey}:{accessId}").
- * Per AMLBot docs the signing key is usually the request-type field name
- * (e.g. "address", "page"), not the wallet address or page number.
- * Transaction recheck uses the actual hash / uid value.
+ * History signs with the page number (e.g. "1"). Address checks use "address".
+ * Transaction and recheck use the hash / uid field value.
  */
 function buildToken(signingKey, accessKey, accessId) {
   return crypto.createHash("md5").update(`${signingKey}:${accessKey}:${accessId}`).digest("hex");
@@ -50,6 +49,7 @@ async function postForm(credentials, path, fields, primaryForToken) {
   }
   if (json.result === false) {
     const err = new Error(json.description || "AMLBot request failed");
+    err.statusCode = 400;
     err.raw = json;
     throw err;
   }
@@ -106,24 +106,9 @@ export async function amlbotRecheck(credentials, { uid }) {
 
 export async function amlbotHistory(credentials, { page = 1 }) {
   const pageStr = String(page);
-  return postForm(credentials, "/history/", { page: pageStr }, "page");
+  return postForm(credentials, "/history/", { page: pageStr }, pageStr);
 }
 
 export async function amlbotTestConnection(credentials) {
-  try {
-    await amlbotHistory(credentials, { page: 1 });
-    return;
-  } catch (firstError) {
-    if (firstError.statusCode !== 401 && firstError.statusCode !== 403) {
-      throw firstError;
-    }
-    // Fallback: some deployments sign history with page number instead of literal "page"
-    const pageStr = "1";
-    await postForm(
-      credentials,
-      "/history/",
-      { page: pageStr },
-      pageStr,
-    );
-  }
+  await amlbotHistory(credentials, { page: 1 });
 }
