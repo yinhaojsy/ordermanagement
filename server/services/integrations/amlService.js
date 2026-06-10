@@ -131,6 +131,11 @@ export function getCheckById(id) {
   return row ? formatCheckRow(row) : null;
 }
 
+export function getCheckDetailById(id) {
+  const row = db.prepare("SELECT * FROM aml_checks WHERE id = ?").get(id);
+  return row ? formatCheckDetail(row) : null;
+}
+
 export function formatCheckRow(row) {
   let signals = [];
   try {
@@ -155,6 +160,19 @@ export function formatCheckRow(row) {
     signals,
     createdAt: row.createdAt,
     isPending: row.status === "pending" || row.status === "new",
+  };
+}
+
+export function formatCheckDetail(row) {
+  let rawResponse = null;
+  try {
+    rawResponse = JSON.parse(row.rawResponseJson || "null");
+  } catch {
+    rawResponse = null;
+  }
+  return {
+    check: formatCheckRow(row),
+    rawResponse,
   };
 }
 
@@ -346,6 +364,8 @@ export async function autoScreenNewWallet(walletId, userId) {
 
 export async function autoScreenNewTransaction(walletId, transactionId, userId) {
   if (!getActiveAmlCredentials()) return null;
+  const wallet = db.prepare("SELECT amlAutoScreenTx FROM tron_wallets WHERE id = ?").get(walletId);
+  if (!wallet || wallet.amlAutoScreenTx === 0) return null;
   if (hasTransactionCheck(transactionId)) return null;
   try {
     return await checkWalletTransaction(walletId, transactionId, { userId });

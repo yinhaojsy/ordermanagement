@@ -678,6 +678,7 @@ const ensureSchema = () => {
       remarks TEXT,
       currentBalance REAL DEFAULT 0,
       lastBalanceCheck TEXT,
+      amlAutoScreenTx INTEGER NOT NULL DEFAULT 1,
       createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updatedAt TEXT
     );`,
@@ -1638,6 +1639,19 @@ const migrateDatabase = () => {
         }
       });
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('customer_permissions_v1')").run();
+    }
+
+    const tronWalletAmlAutoScreenMigration = db
+      .prepare("SELECT 1 FROM _schema_migrations WHERE key = ?")
+      .get("tron_wallets_aml_auto_screen_tx_v1");
+    if (!tronWalletAmlAutoScreenMigration) {
+      const walletCols = db.prepare("PRAGMA table_info(tron_wallets)").all().map((c) => c.name);
+      if (!walletCols.includes("amlAutoScreenTx")) {
+        db.prepare(
+          "ALTER TABLE tron_wallets ADD COLUMN amlAutoScreenTx INTEGER NOT NULL DEFAULT 1",
+        ).run();
+      }
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('tron_wallets_aml_auto_screen_tx_v1')").run();
     }
   } catch (error) {
     console.error("Migration error:", error);

@@ -217,6 +217,7 @@ import {
   getWalletHistory,
   getAmlHistory,
   getAmlCheck,
+  patchWalletAmlAutoScreenTx,
 } from "../controllers/walletAmlController.js";
 import { serveUpload } from "../controllers/uploadsController.js";
 import {
@@ -523,6 +524,12 @@ protectedRouter.get("/wallets/:id/aml/history", section("wallets"), getWalletHis
 protectedRouter.get("/wallets/:id/aml/transactions", section("wallets"), getWalletTransactionAmlSummaries);
 protectedRouter.post("/wallets/:id/aml/check-address", section("wallets"), postCheckAddress);
 protectedRouter.post("/wallets/:id/aml/investigate-address", section("wallets"), postInvestigateAddress);
+protectedRouter.patch(
+  "/wallets/:id/aml/auto-screen-tx",
+  section("wallets"),
+  action("updateWallet"),
+  patchWalletAmlAutoScreenTx,
+);
 protectedRouter.post("/wallets/:id/transactions/:txId/aml/check", section("wallets"), postCheckTransaction);
 protectedRouter.get("/wallets/:id/transactions", section("wallets"), getWalletTransactions);
 

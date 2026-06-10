@@ -23,6 +23,7 @@ import {
   useCheckWalletAddressAmlMutation,
   useInvestigateWalletAddressAmlMutation,
   useCheckWalletTransactionAmlMutation,
+  useUpdateWalletAmlAutoScreenTxMutation,
 } from "../services/api";
 import { formatDate } from "../utils/format";
 import { useAppSelector } from "../app/hooks";
@@ -48,6 +49,45 @@ const truncateAddress = (address: string) => {
   if (!address || address.length < 10) return address;
   return `${address.substring(0, 6)}...${address.substring(address.length - 4)}`;
 };
+
+function isWalletAutoScreenTxEnabled(wallet: { amlAutoScreenTx?: number }) {
+  return wallet.amlAutoScreenTx !== 0;
+}
+
+function AmlAutoScreenToggle({
+  enabled,
+  disabled,
+  onToggle,
+  title,
+}: {
+  enabled: boolean;
+  disabled?: boolean;
+  onToggle: () => void;
+  title?: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={enabled}
+      title={title}
+      disabled={disabled}
+      onClick={(e) => {
+        e.stopPropagation();
+        onToggle();
+      }}
+      className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors disabled:opacity-50 ${
+        enabled ? "bg-blue-600" : "bg-slate-300"
+      }`}
+    >
+      <span
+        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+          enabled ? "translate-x-6" : "translate-x-1"
+        }`}
+      />
+    </button>
+  );
+}
 
 export default function WalletTrackerPage() {
   const { t } = useTranslation();
@@ -108,11 +148,13 @@ export default function WalletTrackerPage() {
   const [checkAddressAml] = useCheckWalletAddressAmlMutation();
   const [investigateAddressAml] = useInvestigateWalletAddressAmlMutation();
   const [checkTransactionAml] = useCheckWalletTransactionAmlMutation();
+  const [updateWalletAmlAutoScreenTx] = useUpdateWalletAmlAutoScreenTxMutation();
 
   const [amlReportCheck, setAmlReportCheck] = useState<AmlCheck | null>(null);
   const [amlReportSubtitle, setAmlReportSubtitle] = useState("");
   const [showAmlHistory, setShowAmlHistory] = useState(false);
   const [amlActionLoading, setAmlActionLoading] = useState<string | null>(null);
+  const [autoScreenToggleId, setAutoScreenToggleId] = useState<number | null>(null);
 
   const walletAmlHistoryItems = useMemo(
     () => asAmlCheckList(walletAmlHistoryData?.history),
@@ -364,6 +406,17 @@ export default function WalletTrackerPage() {
     }
   };
 
+  const handleToggleAutoScreenTx = async (walletId: number, currentlyEnabled: boolean) => {
+    setAutoScreenToggleId(walletId);
+    try {
+      await updateWalletAmlAutoScreenTx({ id: walletId, enabled: !currentlyEnabled }).unwrap();
+    } catch (error: any) {
+      showAmlError(error);
+    } finally {
+      setAutoScreenToggleId(null);
+    }
+  };
+
   // Handle Esc key to close modals
   useEffect(() => {
     const handleEscKey = (event: KeyboardEvent) => {
@@ -514,6 +567,9 @@ export default function WalletTrackerPage() {
                   {amlStatus?.enabled ? (
                     <th className="py-3 px-2">{t("aml.risk")}</th>
                   ) : null}
+                  {amlStatus?.enabled ? (
+                    <th className="py-3 px-2">{t("aml.autoScreenTx")}</th>
+                  ) : null}
                   <th className="py-3 px-2">{t("wallets.actions") || "Actions"}</th>
                 </tr>
               </thead>
@@ -578,6 +634,24 @@ export default function WalletTrackerPage() {
                             screeningLabel={t("aml.screening")}
                           />
                         </button>
+                      </td>
+                    ) : null}
+                    {amlStatus?.enabled ? (
+                      <td className="py-3 px-2">
+                        {hasActionPermission(authUser, "updateWallet") ? (
+                          <AmlAutoScreenToggle
+                            enabled={isWalletAutoScreenTxEnabled(wallet)}
+                            disabled={autoScreenToggleId === wallet.id}
+                            title={t("aml.autoScreenTxHint")}
+                            onToggle={() =>
+                              handleToggleAutoScreenTx(wallet.id, isWalletAutoScreenTxEnabled(wallet))
+                            }
+                          />
+                        ) : (
+                          <span className="text-xs text-slate-500">
+                            {isWalletAutoScreenTxEnabled(wallet) ? "On" : "Off"}
+                          </span>
+                        )}
                       </td>
                     ) : null}
                     <td className="py-3 px-2">
@@ -792,15 +866,33 @@ export default function WalletTrackerPage() {
               </div>
             </div>
 
-            <div className="mb-4 p-3 bg-slate-50 rounded-lg flex items-center justify-between">
+            <div className="mb-4 p-3 bg-slate-50 rounded-lg flex items-center justify-between gap-4">
               <div>
                 <div className="text-sm text-slate-600">{t("wallets.currentBalance") || "Current Balance"}</div>
                 <div className="text-xl font-bold text-slate-900">
                   {formatCurrency(selectedWallet.currentBalance || 0)}
                 </div>
               </div>
+              {amlStatus?.enabled && hasActionPermission(authUser, "updateWallet") ? (
+                <div className="flex items-center gap-3">
+                  <div className="text-right">
+                    <div className="text-sm font-medium text-slate-700">{t("aml.autoScreenTx")}</div>
+                    <div className="text-xs text-slate-500 max-w-xs">{t("aml.autoScreenTxHint")}</div>
+                  </div>
+                  <AmlAutoScreenToggle
+                    enabled={isWalletAutoScreenTxEnabled(selectedWallet)}
+                    disabled={autoScreenToggleId === selectedWallet.id}
+                    onToggle={() =>
+                      handleToggleAutoScreenTx(
+                        selectedWallet.id,
+                        isWalletAutoScreenTxEnabled(selectedWallet),
+                      )
+                    }
+                  />
+                </div>
+              ) : null}
               {selectedWallet.lastBalanceCheck && (
-                <div className="text-xs text-slate-500">
+                <div className="text-xs text-slate-500 text-right shrink-0">
                   {t("wallets.lastChecked") || "Last checked"}:<br />
                   {formatDate(selectedWallet.lastBalanceCheck)}
                 </div>
@@ -971,6 +1063,21 @@ export default function WalletTrackerPage() {
         check={amlReportCheck}
         subtitle={amlReportSubtitle}
         onCheckUpdated={handleAmlCheckUpdated}
+        onInvestigate={
+          amlReportCheck?.checkType === "address" && amlReportCheck.walletId
+            ? () =>
+                runAmlAction(
+                  `investigate-${amlReportCheck.walletId}`,
+                  () => investigateAddressAml(amlReportCheck.walletId).unwrap(),
+                  amlReportSubtitle,
+                )
+            : undefined
+        }
+        investigateLoading={
+          amlReportCheck?.walletId
+            ? amlActionLoading === `investigate-${amlReportCheck.walletId}`
+            : false
+        }
       />
 
       <ConfirmModal

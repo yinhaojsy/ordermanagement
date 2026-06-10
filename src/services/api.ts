@@ -2389,6 +2389,13 @@ export const api = createApi({
       query: (walletId) => `wallets/${walletId}/aml/history`,
       providesTags: (_r, _e, walletId) => [{ type: "AmlCheck", id: `HISTORY_${walletId}` }],
     }),
+    getAmlCheck: builder.query<
+      { check: import("../types/integrations").AmlCheck; rawResponse: unknown },
+      number
+    >({
+      query: (checkId) => `wallets/aml/checks/${checkId}`,
+      providesTags: (_r, _e, checkId) => [{ type: "AmlCheck", id: `CHECK_${checkId}` }],
+    }),
     checkWalletAddressAml: builder.mutation<{ check: import("../types/integrations").AmlCheck }, number>({
       query: (walletId) => ({
         url: `wallets/${walletId}/aml/check-address`,
@@ -2434,7 +2441,24 @@ export const api = createApi({
         method: "POST",
         body,
       }),
-      invalidatesTags: [{ type: "AmlCheck", id: "WALLET_SUMMARIES" }],
+      invalidatesTags: (_r, _e, body) => [
+        { type: "AmlCheck", id: "WALLET_SUMMARIES" },
+        ...(body.checkId ? [{ type: "AmlCheck" as const, id: `CHECK_${body.checkId}` }] : []),
+      ],
+    }),
+    updateWalletAmlAutoScreenTx: builder.mutation<
+      { wallet: { id: number; amlAutoScreenTx: number } },
+      { id: number; enabled: boolean }
+    >({
+      query: ({ id, enabled }) => ({
+        url: `wallets/${id}/aml/auto-screen-tx`,
+        method: "PATCH",
+        body: { enabled },
+      }),
+      invalidatesTags: (_r, _e, { id }) => [
+        { type: "Wallet", id },
+        { type: "Wallet", id: "LIST" },
+      ],
     }),
   }),
 });
@@ -2613,10 +2637,12 @@ export const {
   useGetWalletAmlSummariesQuery,
   useGetWalletTransactionAmlSummariesQuery,
   useGetWalletAmlHistoryQuery,
+  useGetAmlCheckQuery,
   useCheckWalletAddressAmlMutation,
   useInvestigateWalletAddressAmlMutation,
   useCheckWalletTransactionAmlMutation,
   useRecheckAmlMutation,
+  useUpdateWalletAmlAutoScreenTxMutation,
 } = api;
 
 

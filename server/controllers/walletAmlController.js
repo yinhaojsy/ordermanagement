@@ -1,3 +1,4 @@
+import { db } from "../db.js";
 import {
   checkWalletAddress,
   investigateWalletAddress,
@@ -9,6 +10,7 @@ import {
   getWalletAmlSummaries,
   getTransactionAmlSummaries,
   getCheckById,
+  getCheckDetailById,
 } from "../services/integrations/amlService.js";
 import { isAmlIntegrationEnabled as isEnabled } from "../services/integrations/integrationConfigStore.js";
 
@@ -104,7 +106,26 @@ export const getAmlHistory = async (req, res, next) => {
 };
 
 export const getAmlCheck = (req, res) => {
-  const check = getCheckById(Number(req.params.checkId));
-  if (!check) return res.status(404).json({ message: "Check not found" });
-  res.json({ check });
+  const detail = getCheckDetailById(Number(req.params.checkId));
+  if (!detail) return res.status(404).json({ message: "Check not found" });
+  res.json(detail);
+};
+
+export const patchWalletAmlAutoScreenTx = (req, res, next) => {
+  try {
+    const walletId = Number(req.params.id);
+    const { enabled } = req.body || {};
+    if (typeof enabled !== "boolean") {
+      return res.status(400).json({ message: "enabled (boolean) is required" });
+    }
+    const existing = db.prepare("SELECT id FROM tron_wallets WHERE id = ?").get(walletId);
+    if (!existing) return res.status(404).json({ message: "Wallet not found" });
+    db.prepare(
+      "UPDATE tron_wallets SET amlAutoScreenTx = ?, updatedAt = ? WHERE id = ?",
+    ).run(enabled ? 1 : 0, new Date().toISOString(), walletId);
+    const wallet = db.prepare("SELECT * FROM tron_wallets WHERE id = ?").get(walletId);
+    res.json({ wallet });
+  } catch (error) {
+    next(error);
+  }
 };
