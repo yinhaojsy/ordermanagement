@@ -36,6 +36,15 @@ function asAmlCheckList(value: unknown): AmlCheck[] {
   return Array.isArray(value) ? value : [];
 }
 
+function amlReportTabForCheck(
+  check: AmlCheck,
+  preferred: "screen" | "investigate" = "screen",
+): "screen" | "investigate" {
+  if (check.checkType === "address_investigation") return "investigate";
+  if (check.checkType === "address") return "screen";
+  return preferred;
+}
+
 // Helper function to format currency
 const formatCurrency = (amount: number) => {
   return `${amount.toLocaleString("en-US", {
@@ -152,6 +161,7 @@ export default function WalletTrackerPage() {
 
   const [amlReportCheck, setAmlReportCheck] = useState<AmlCheck | null>(null);
   const [amlReportSubtitle, setAmlReportSubtitle] = useState("");
+  const [amlReportInitialTab, setAmlReportInitialTab] = useState<"screen" | "investigate">("screen");
   const [showAmlHistory, setShowAmlHistory] = useState(false);
   const [amlActionLoading, setAmlActionLoading] = useState<string | null>(null);
   const [autoScreenToggleId, setAutoScreenToggleId] = useState<number | null>(null);
@@ -375,25 +385,26 @@ export default function WalletTrackerPage() {
     });
   };
 
-  const openAmlReport = (check: AmlCheck, subtitle: string) => {
+  const openAmlReport = (
+    check: AmlCheck,
+    subtitle: string,
+    tab: "screen" | "investigate" = "screen",
+  ) => {
+    setAmlReportInitialTab(amlReportTabForCheck(check, tab));
     setAmlReportCheck(check);
     setAmlReportSubtitle(subtitle);
   };
 
-  const handleAmlCheckUpdated = (check: AmlCheck) => {
-    setAmlReportCheck(check);
-    refetchAmlSummaries();
-    if (transactionsModalWalletId) {
-      refetchTxAmlSummaries();
-      refetchWalletAmlHistory();
-    }
-  };
-
-  const runAmlAction = async (key: string, action: () => Promise<{ check: AmlCheck }>, subtitle: string) => {
+  const runAmlAction = async (
+    key: string,
+    action: () => Promise<{ check: AmlCheck }>,
+    subtitle: string,
+    tab: "screen" | "investigate",
+  ) => {
     setAmlActionLoading(key);
     try {
       const result = await action();
-      openAmlReport(result.check, subtitle);
+      openAmlReport(result.check, subtitle, tab);
       await refetchAmlSummaries();
       if (transactionsModalWalletId) {
         await refetchTxAmlSummaries();
@@ -403,6 +414,15 @@ export default function WalletTrackerPage() {
       showAmlError(error);
     } finally {
       setAmlActionLoading(null);
+    }
+  };
+
+  const handleAmlCheckUpdated = (check: AmlCheck) => {
+    setAmlReportCheck(check);
+    refetchAmlSummaries();
+    if (transactionsModalWalletId) {
+      refetchTxAmlSummaries();
+      refetchWalletAmlHistory();
     }
   };
 
@@ -625,7 +645,7 @@ export default function WalletTrackerPage() {
                           className="inline-flex"
                           onClick={() => {
                             const check = amlSummariesData?.summaries?.[wallet.id];
-                            if (check) openAmlReport(check, wallet.walletAddress);
+                            if (check) openAmlReport(check, wallet.walletAddress, "screen");
                           }}
                         >
                           <AmlRiskBadge
@@ -690,6 +710,7 @@ export default function WalletTrackerPage() {
                                   `screen-${wallet.id}`,
                                   () => checkAddressAml(wallet.id).unwrap(),
                                   wallet.walletAddress,
+                                  "screen",
                                 )
                               }
                             >
@@ -703,6 +724,7 @@ export default function WalletTrackerPage() {
                                   `investigate-${wallet.id}`,
                                   () => investigateAddressAml(wallet.id).unwrap(),
                                   wallet.walletAddress,
+                                  "investigate",
                                 )
                               }
                             >
@@ -912,9 +934,22 @@ export default function WalletTrackerPage() {
                         key={item.id}
                         type="button"
                         className="flex w-full items-center justify-between rounded border border-slate-100 px-2 py-1 text-left hover:bg-slate-50"
-                        onClick={() => openAmlReport(item, selectedWallet.walletAddress)}
+                        onClick={() =>
+                          openAmlReport(
+                            item,
+                            selectedWallet.walletAddress,
+                            item.checkType === "address_investigation" ? "investigate" : "screen",
+                          )
+                        }
                       >
-                        <span className="text-slate-600">{formatDate(item.createdAt)} · {item.checkType}</span>
+                        <span className="text-slate-600">
+                          {formatDate(item.createdAt)} ·{" "}
+                          {item.checkType === "address"
+                            ? t("aml.checkTypeScreen")
+                            : item.checkType === "address_investigation"
+                              ? t("aml.checkTypeInvestigate")
+                              : t("aml.checkTypeTransaction")}
+                        </span>
                         <AmlRiskBadge check={item} notScreenedLabel="—" screeningLabel={t("aml.screening")} />
                       </button>
                     ))}
@@ -1024,6 +1059,7 @@ export default function WalletTrackerPage() {
                                     txId: tx.id,
                                   }).unwrap(),
                                 tx.transactionHash,
+                                "screen",
                               )
                             }
                           >
@@ -1062,16 +1098,34 @@ export default function WalletTrackerPage() {
         onClose={() => setAmlReportCheck(null)}
         check={amlReportCheck}
         subtitle={amlReportSubtitle}
+        initialTab={amlReportInitialTab}
         onCheckUpdated={handleAmlCheckUpdated}
+        onScreen={
+          amlReportCheck?.walletId && amlReportCheck.checkType !== "transaction"
+            ? () =>
+                runAmlAction(
+                  `screen-${amlReportCheck.walletId}`,
+                  () => checkAddressAml(amlReportCheck.walletId).unwrap(),
+                  amlReportSubtitle,
+                  "screen",
+                )
+            : undefined
+        }
         onInvestigate={
-          amlReportCheck?.checkType === "address" && amlReportCheck.walletId
+          amlReportCheck?.walletId && amlReportCheck.checkType !== "transaction"
             ? () =>
                 runAmlAction(
                   `investigate-${amlReportCheck.walletId}`,
                   () => investigateAddressAml(amlReportCheck.walletId).unwrap(),
                   amlReportSubtitle,
+                  "investigate",
                 )
             : undefined
+        }
+        screenLoading={
+          amlReportCheck?.walletId
+            ? amlActionLoading === `screen-${amlReportCheck.walletId}`
+            : false
         }
         investigateLoading={
           amlReportCheck?.walletId

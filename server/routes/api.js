@@ -215,6 +215,7 @@ import {
   postCheckTransaction,
   postRecheck,
   getWalletHistory,
+  getWalletAddressAmlReportsHandler,
   getAmlHistory,
   getAmlCheck,
   patchWalletAmlAutoScreenTx,
@@ -521,6 +522,7 @@ protectedRouter.put("/wallets/:id", section("wallets"), action("updateWallet"), 
 protectedRouter.delete("/wallets/:id", section("wallets"), action("deleteWallet"), deleteWallet);
 protectedRouter.post("/wallets/:id/refresh", section("wallets"), refreshWalletBalance);
 protectedRouter.get("/wallets/:id/aml/history", section("wallets"), getWalletHistory);
+protectedRouter.get("/wallets/:id/aml/reports", section("wallets"), getWalletAddressAmlReportsHandler);
 protectedRouter.get("/wallets/:id/aml/transactions", section("wallets"), getWalletTransactionAmlSummaries);
 protectedRouter.post("/wallets/:id/aml/check-address", section("wallets"), postCheckAddress);
 protectedRouter.post("/wallets/:id/aml/investigate-address", section("wallets"), postInvestigateAddress);

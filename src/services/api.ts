@@ -2389,6 +2389,13 @@ export const api = createApi({
       query: (walletId) => `wallets/${walletId}/aml/history`,
       providesTags: (_r, _e, walletId) => [{ type: "AmlCheck", id: `HISTORY_${walletId}` }],
     }),
+    getWalletAddressAmlReports: builder.query<
+      { screen: import("../types/integrations").AmlCheck | null; investigation: import("../types/integrations").AmlCheck | null },
+      number
+    >({
+      query: (walletId) => `wallets/${walletId}/aml/reports`,
+      providesTags: (_r, _e, walletId) => [{ type: "AmlCheck", id: `WALLET_REPORTS_${walletId}` }],
+    }),
     getAmlCheck: builder.query<
       { check: import("../types/integrations").AmlCheck; rawResponse: unknown },
       number
@@ -2405,6 +2412,7 @@ export const api = createApi({
       invalidatesTags: [
         { type: "AmlCheck", id: "WALLET_SUMMARIES" },
         (_r, _e, walletId) => ({ type: "AmlCheck", id: `HISTORY_${walletId}` }),
+        (_r, _e, walletId) => ({ type: "AmlCheck", id: `WALLET_REPORTS_${walletId}` }),
       ],
     }),
     investigateWalletAddressAml: builder.mutation<{ check: import("../types/integrations").AmlCheck }, number>({
@@ -2416,6 +2424,7 @@ export const api = createApi({
       invalidatesTags: [
         { type: "AmlCheck", id: "WALLET_SUMMARIES" },
         (_r, _e, walletId) => ({ type: "AmlCheck", id: `HISTORY_${walletId}` }),
+        (_r, _e, walletId) => ({ type: "AmlCheck", id: `WALLET_REPORTS_${walletId}` }),
       ],
     }),
     checkWalletTransactionAml: builder.mutation<
@@ -2637,6 +2646,7 @@ export const {
   useGetWalletAmlSummariesQuery,
   useGetWalletTransactionAmlSummariesQuery,
   useGetWalletAmlHistoryQuery,
+  useGetWalletAddressAmlReportsQuery,
   useGetAmlCheckQuery,
   useCheckWalletAddressAmlMutation,
   useInvestigateWalletAddressAmlMutation,

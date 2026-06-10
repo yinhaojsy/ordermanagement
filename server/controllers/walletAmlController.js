@@ -6,6 +6,7 @@ import {
   recheckById,
   recheckByUid,
   getWalletAmlHistory,
+  getWalletAddressAmlReports,
   getGlobalAmlHistory,
   getWalletAmlSummaries,
   getTransactionAmlSummaries,
@@ -92,6 +93,11 @@ export const getWalletHistory = (req, res) => {
   const walletId = Number(req.params.id);
   const limit = Math.min(Number(req.query.limit) || 50, 200);
   res.json({ history: getWalletAmlHistory(walletId, { limit }) });
+};
+
+export const getWalletAddressAmlReportsHandler = (req, res) => {
+  const walletId = Number(req.params.id);
+  res.json(getWalletAddressAmlReports(walletId));
 };
 
 export const getAmlHistory = async (req, res, next) => {

@@ -280,13 +280,34 @@ export async function recheckById(checkId, { userId } = {}) {
   return recheckByUid(row.externalUid, { userId, walletId: row.walletId });
 }
 
-export async function getWalletAmlHistory(walletId, { limit = 50 } = {}) {
+export function getWalletAmlHistory(walletId, { limit = 50 } = {}) {
   const rows = db
     .prepare(
       `SELECT * FROM aml_checks WHERE walletId = ? ORDER BY createdAt DESC LIMIT ?`,
     )
     .all(walletId, limit);
   return rows.map(formatCheckRow);
+}
+
+export function getWalletAddressAmlReports(walletId) {
+  const screen = db
+    .prepare(
+      `SELECT * FROM aml_checks
+       WHERE walletId = ? AND checkType = 'address' AND transactionId IS NULL
+       ORDER BY id DESC LIMIT 1`,
+    )
+    .get(walletId);
+  const investigation = db
+    .prepare(
+      `SELECT * FROM aml_checks
+       WHERE walletId = ? AND checkType = 'address_investigation' AND transactionId IS NULL
+       ORDER BY id DESC LIMIT 1`,
+    )
+    .get(walletId);
+  return {
+    screen: screen ? formatCheckRow(screen) : null,
+    investigation: investigation ? formatCheckRow(investigation) : null,
+  };
 }
 
 export async function getGlobalAmlHistory({ page = 1, pageSize = 20 } = {}) {
