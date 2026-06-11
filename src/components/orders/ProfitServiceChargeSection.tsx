@@ -1,7 +1,7 @@
 import React from "react";
 import { ProfitSection } from "./ProfitSection";
 import { ServiceChargeSection } from "./ServiceChargeSection";
-import type { Account, Order, AuthResponse } from "../../types";
+import type { Account, AuthResponse, Order, ReceiptFundedFrom } from "../../types";
 import { canPerformOrderActions } from "../../utils/orderPermissions";
 
 interface ProfitServiceChargeSectionProps {
@@ -28,6 +28,8 @@ interface ProfitServiceChargeSectionProps {
   setServiceChargeCurrency: (value: string) => void;
   serviceChargeAccountId: string;
   setServiceChargeAccountId: (value: string) => void;
+  serviceChargeFundedFrom: ReceiptFundedFrom;
+  setServiceChargeFundedFrom: (value: ReceiptFundedFrom) => void;
   showServiceChargeSection: boolean;
   setShowServiceChargeSection: (show: boolean) => void;
   
@@ -64,6 +66,8 @@ export const ProfitServiceChargeSection: React.FC<ProfitServiceChargeSectionProp
   setServiceChargeCurrency,
   serviceChargeAccountId,
   setServiceChargeAccountId,
+  serviceChargeFundedFrom,
+  setServiceChargeFundedFrom,
   showServiceChargeSection,
   setShowServiceChargeSection,
   updateOrder,
@@ -131,6 +135,7 @@ export const ProfitServiceChargeSection: React.FC<ProfitServiceChargeSectionProp
     setServiceChargeAmount("");
     setServiceChargeCurrency("");
     setServiceChargeAccountId("");
+    setServiceChargeFundedFrom("cash");
   };
 
   const handleSaveProfit = async () => {
@@ -205,8 +210,10 @@ export const ProfitServiceChargeSection: React.FC<ProfitServiceChargeSectionProp
       return;
     }
     
+    const isBalanceFunded = serviceChargeFundedFrom === "customer_balance";
+    const missingAccount = !isBalanceFunded && !serviceChargeAccountId;
     // If amount is 0 or empty, clear the draft
-    if (amount === 0 || !serviceChargeAmount || !serviceChargeCurrency || !serviceChargeAccountId) {
+    if (amount === 0 || !serviceChargeAmount || !serviceChargeCurrency || missingAccount) {
       if (hasDraftServiceCharge) {
         try {
           await updateOrder({
@@ -221,6 +228,7 @@ export const ProfitServiceChargeSection: React.FC<ProfitServiceChargeSectionProp
           setServiceChargeAmount("");
           setServiceChargeCurrency("");
           setServiceChargeAccountId("");
+          setServiceChargeFundedFrom("cash");
         } catch (error: any) {
           console.error("Error clearing service charge:", error);
           const errorMessage = error?.data?.message || error?.message || t("orders.failedToRemoveServiceCharge");
@@ -232,6 +240,7 @@ export const ProfitServiceChargeSection: React.FC<ProfitServiceChargeSectionProp
         setServiceChargeAmount("");
         setServiceChargeCurrency("");
         setServiceChargeAccountId("");
+        setServiceChargeFundedFrom("cash");
       }
       return;
     }
@@ -243,7 +252,8 @@ export const ProfitServiceChargeSection: React.FC<ProfitServiceChargeSectionProp
         data: {
           serviceChargeAmount: amount,
           serviceChargeCurrency: serviceChargeCurrency,
-          serviceChargeAccountId: Number(serviceChargeAccountId),
+          serviceChargeAccountId: isBalanceFunded ? null : Number(serviceChargeAccountId),
+          serviceChargeFundedFrom: serviceChargeFundedFrom,
         },
       }).unwrap();
       // Close the section after successful save
@@ -252,6 +262,7 @@ export const ProfitServiceChargeSection: React.FC<ProfitServiceChargeSectionProp
       setServiceChargeAmount("");
       setServiceChargeCurrency("");
       setServiceChargeAccountId("");
+      setServiceChargeFundedFrom("cash");
     } catch (error: any) {
       console.error("Error updating service charge:", error);
       const errorMessage = error?.data?.message || error?.message || t("orders.failedToUpdateServiceCharge");
@@ -297,6 +308,8 @@ export const ProfitServiceChargeSection: React.FC<ProfitServiceChargeSectionProp
         setServiceChargeCurrency={setServiceChargeCurrency}
         serviceChargeAccountId={serviceChargeAccountId}
         setServiceChargeAccountId={setServiceChargeAccountId}
+        serviceChargeFundedFrom={serviceChargeFundedFrom}
+        setServiceChargeFundedFrom={setServiceChargeFundedFrom}
         showServiceChargeSection={showServiceChargeSection}
         setShowServiceChargeSection={setShowServiceChargeSection}
         onSave={handleSaveServiceCharge}

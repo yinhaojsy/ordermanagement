@@ -24,6 +24,13 @@ import { ORDER_RECEIPT_PAYMENT_TOLERANCE } from "../../utils/orders/orderAmountT
 
 export type UnifiedLineKind = "receipt" | "payment" | "profit" | "service_charge";
 
+export type ResolvedServiceChargeLine = {
+  amount: number;
+  currencyCode: string;
+  accountId?: number;
+  fundedFrom: ReceiptFundedFrom;
+};
+
 export type UnifiedLine = {
   localId: string;
   kind: UnifiedLineKind;
@@ -46,7 +53,7 @@ function newLine(kind: UnifiedLineKind): UnifiedLine {
     kind,
     amount: "",
     accountId: "",
-    fundedFrom: kind === "receipt" || kind === "payment" ? "cash" : undefined,
+    fundedFrom: kind === "receipt" || kind === "payment" || kind === "service_charge" ? "cash" : undefined,
     file: null,
     ...(kind === "service_charge" ? { serviceChargeMode: "fixed" as const, serviceChargePercent: "", serviceChargeCurrency: "" } : {}),
   };
@@ -345,6 +352,7 @@ export function useUnifiedOrderModal(
         serviceChargeMode: "fixed",
         serviceChargePercent: "",
         serviceChargeCurrency: sc.currencyCode || "",
+        fundedFrom: sc.fundedFrom === "customer_balance" ? "customer_balance" : "cash",
       });
     }
     if (nextLines.length === 0) {
@@ -414,23 +422,33 @@ export function useUnifiedOrderModal(
     };
 
     // Resolve service charge amounts (percentage → fixed)
-    const resolvedScLines = scLines.map((scLine) => {
-      if (!scLine.accountId) return null;
-      const acc = accounts.find((a) => a.id === Number(scLine.accountId));
-      if (!acc) return null;
+    const resolvedScLines: ResolvedServiceChargeLine[] = [];
+    for (const scLine of scLines) {
+      const fundedFrom = scLine.fundedFrom ?? "cash";
+      const currencyCode = scLine.serviceChargeCurrency;
+      if (!currencyCode) continue;
+      if (fundedFrom === "cash" && !scLine.accountId) continue;
+
       let resolvedAmount: number;
       if (scLine.serviceChargeMode === "percentage" && scLine.serviceChargePercent) {
         const pct = Number(scLine.serviceChargePercent);
-        const base = acc.currencyCode === fromCurrency
-          ? Number(amountBuy || 0)
-          : Number(amountSell || 0);
+        const base =
+          currencyCode === fromCurrency
+            ? Number(amountBuy || 0)
+            : Number(amountSell || 0);
         resolvedAmount = (pct / 100) * base;
       } else {
         resolvedAmount = Number(scLine.amount || 0);
       }
-      if (resolvedAmount === 0) return null;
-      return { amount: resolvedAmount, currencyCode: acc.currencyCode, accountId: Number(scLine.accountId) };
-    }).filter((x): x is { amount: number; currencyCode: string; accountId: number } => x !== null);
+      if (!resolvedAmount || resolvedAmount === 0) continue;
+
+      resolvedScLines.push({
+        amount: resolvedAmount,
+        currencyCode,
+        accountId: fundedFrom === "cash" ? Number(scLine.accountId) : undefined,
+        fundedFrom,
+      });
+    }
 
     const resolvedProfitLines: { amount: number; currencyCode: string; accountId: number }[] = [];
 
@@ -516,7 +534,7 @@ export function useUnifiedOrderModal(
   const replaceProfitsAndSCs = async (
     orderId: number,
     resolvedProfitLines: { amount: number; currencyCode: string; accountId: number }[],
-    resolvedScLines: { amount: number; currencyCode: string; accountId: number }[],
+    resolvedScLines: ResolvedServiceChargeLine[],
     confirm: boolean,
   ) => {
     if (orderDetails) {
@@ -541,7 +559,7 @@ export function useUnifiedOrderModal(
   const createAndConfirmProfitsAndSCs = async (
     orderId: number,
     resolvedProfitLines: { amount: number; currencyCode: string; accountId: number }[],
-    resolvedScLines: { amount: number; currencyCode: string; accountId: number }[],
+    resolvedScLines: ResolvedServiceChargeLine[],
     confirm: boolean,
   ) => {
     for (const p of resolvedProfitLines) {

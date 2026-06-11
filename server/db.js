@@ -867,6 +867,7 @@ const ensureSchema = () => {
   ensureCustomerLedgerAccountColumns();
   ensureOrderReceiptFundedFromColumn();
   ensureOrderPaymentFundedFromColumn();
+  ensureOrderServiceChargeFundedFromColumn();
 };
 
 /** Order-linked customer ledger columns (idempotent; safe on every startup and API call). */
@@ -950,6 +951,41 @@ export function ensureOrderPaymentFundedFromColumn() {
       "ALTER TABLE order_payments ADD COLUMN fundedFrom TEXT NOT NULL DEFAULT 'cash';",
     ).run();
     db.prepare("UPDATE order_payments SET fundedFrom = 'cash' WHERE fundedFrom IS NULL;").run();
+  }
+}
+
+export function ensureOrderServiceChargeFundedFromColumn() {
+  const tableInfo = db.prepare("PRAGMA table_info(order_service_charges)").all();
+  const columnNames = tableInfo.map((col) => col.name);
+  const accountCol = tableInfo.find((col) => col.name === "accountId");
+
+  if (!columnNames.includes("fundedFrom")) {
+    db.prepare(
+      "ALTER TABLE order_service_charges ADD COLUMN fundedFrom TEXT NOT NULL DEFAULT 'cash';",
+    ).run();
+    db.prepare("UPDATE order_service_charges SET fundedFrom = 'cash' WHERE fundedFrom IS NULL;").run();
+  }
+
+  if (accountCol?.notnull === 1) {
+    db.exec(`
+      CREATE TABLE order_service_charges_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        orderId INTEGER NOT NULL,
+        amount REAL NOT NULL,
+        currencyCode TEXT NOT NULL,
+        accountId INTEGER,
+        status TEXT NOT NULL DEFAULT 'draft',
+        fundedFrom TEXT NOT NULL DEFAULT 'cash',
+        createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(orderId) REFERENCES orders(id) ON DELETE CASCADE,
+        FOREIGN KEY(accountId) REFERENCES accounts(id)
+      );
+      INSERT INTO order_service_charges_new (id, orderId, amount, currencyCode, accountId, status, fundedFrom, createdAt)
+        SELECT id, orderId, amount, currencyCode, accountId, status, COALESCE(fundedFrom, 'cash'), createdAt
+        FROM order_service_charges;
+      DROP TABLE order_service_charges;
+      ALTER TABLE order_service_charges_new RENAME TO order_service_charges;
+    `);
   }
 }
 
@@ -1259,6 +1295,7 @@ const migrateDatabase = () => {
     }
     ensureOrderReceiptFundedFromColumn();
     ensureOrderPaymentFundedFromColumn();
+    ensureOrderServiceChargeFundedFromColumn();
 
     // Check order_payments table for status column
     if (!paymentColumnNames.includes("status")) {
@@ -1479,7 +1516,8 @@ const migrateDatabase = () => {
     if (!ledgerAccountColumnsMigration) {
       ensureCustomerLedgerAccountColumns();
       ensureOrderReceiptFundedFromColumn();
-    ensureOrderPaymentFundedFromColumn();
+      ensureOrderPaymentFundedFromColumn();
+      ensureOrderServiceChargeFundedFromColumn();
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('customer_ledger_account_columns_v1')").run();
     }
 

@@ -19,7 +19,7 @@ import {
   useDeleteServiceChargeMutation,
 } from "../../services/api";
 import { getDefaultOtcHandler } from "../../utils/otcHandlerPreference";
-import type { Account, AuthResponse } from "../../types";
+import type { Account, AuthResponse, ReceiptFundedFrom } from "../../types";
 import { ORDER_RECEIPT_PAYMENT_TOLERANCE } from "../../utils/orders/orderAmountTolerance";
 
 interface OtcForm {
@@ -72,6 +72,7 @@ export function useOtcOrder(
   const [otcServiceChargeAmount, setOtcServiceChargeAmount] = useState<string>("");
   const [otcServiceChargeCurrency, setOtcServiceChargeCurrency] = useState<string>("");
   const [otcServiceChargeAccountId, setOtcServiceChargeAccountId] = useState<string>("");
+  const [otcServiceChargeFundedFrom, setOtcServiceChargeFundedFrom] = useState<ReceiptFundedFrom>("cash");
   const [showOtcProfitSection, setShowOtcProfitSection] = useState(false);
   const [showOtcServiceChargeSection, setShowOtcServiceChargeSection] = useState(false);
   const [otcCalculatedField, setOtcCalculatedField] = useState<"buy" | "sell" | null>(null);
@@ -182,18 +183,25 @@ export function useOtcOrder(
         setOtcServiceChargeAmount(String(confirmedServiceCharge.amount || ""));
         setOtcServiceChargeCurrency(confirmedServiceCharge.currencyCode || "");
         setOtcServiceChargeAccountId(confirmedServiceCharge.accountId ? String(confirmedServiceCharge.accountId) : "");
+        setOtcServiceChargeFundedFrom(
+          confirmedServiceCharge.fundedFrom === "customer_balance" ? "customer_balance" : "cash",
+        );
         setShowOtcServiceChargeSection(true);
       } else if (draftServiceCharge) {
         // Use draft service charge
         setOtcServiceChargeAmount(String(draftServiceCharge.amount || ""));
         setOtcServiceChargeCurrency(draftServiceCharge.currencyCode || "");
         setOtcServiceChargeAccountId(draftServiceCharge.accountId ? String(draftServiceCharge.accountId) : "");
+        setOtcServiceChargeFundedFrom(
+          draftServiceCharge.fundedFrom === "customer_balance" ? "customer_balance" : "cash",
+        );
         setShowOtcServiceChargeSection(true);
       } else if (order.serviceChargeAmount !== null && order.serviceChargeAmount !== undefined) {
         // Fall back to order table fields
         setOtcServiceChargeAmount(String(order.serviceChargeAmount));
         setOtcServiceChargeCurrency(order.serviceChargeCurrency || "");
         setOtcServiceChargeAccountId(order.serviceChargeAccountId ? String(order.serviceChargeAccountId) : "");
+        setOtcServiceChargeFundedFrom("cash");
         setShowOtcServiceChargeSection(true);
       }
       // Load remarks if available
@@ -249,6 +257,7 @@ export function useOtcOrder(
     setOtcServiceChargeAmount("");
     setOtcServiceChargeCurrency("");
     setOtcServiceChargeAccountId("");
+    setOtcServiceChargeFundedFrom("cash");
     setShowOtcProfitSection(false);
     setShowOtcServiceChargeSection(false);
     setOtcCalculatedField(null);
@@ -434,15 +443,25 @@ export function useOtcOrder(
         orderData.profitAccountId = null as unknown as number;
       }
       
-      if (otcServiceChargeAmount && otcServiceChargeAccountId && otcServiceChargeCurrency) {
-        orderData.serviceChargeAmount = Number(otcServiceChargeAmount);
+      const otcScBal = otcServiceChargeFundedFrom === "customer_balance";
+      const otcScAmount = Number(otcServiceChargeAmount);
+      const otcScValid =
+        otcServiceChargeAmount &&
+        otcServiceChargeCurrency &&
+        (!otcScBal ? otcServiceChargeAccountId : true) &&
+        otcScAmount !== 0;
+      if (otcScValid) {
+        orderData.serviceChargeAmount = otcScAmount;
         orderData.serviceChargeCurrency = otcServiceChargeCurrency;
-        orderData.serviceChargeAccountId = Number(otcServiceChargeAccountId);
+        orderData.serviceChargeFundedFrom = otcServiceChargeFundedFrom;
+        orderData.serviceChargeAccountId = otcScBal
+          ? (null as unknown as number)
+          : Number(otcServiceChargeAccountId);
       } else if (showOtcServiceChargeSection || hadDraftServiceCharge) {
-        // If section is shown but fields are empty, or if there was a draft, clear it
         orderData.serviceChargeAmount = null as unknown as number;
         orderData.serviceChargeCurrency = null as unknown as string;
         orderData.serviceChargeAccountId = null as unknown as number;
+        orderData.serviceChargeFundedFrom = null as unknown as ReceiptFundedFrom;
       }
 
       if (otcEditingOrderId) {
@@ -647,10 +666,20 @@ export function useOtcOrder(
         orderData.profitAccountId = Number(otcProfitAccountId);
       }
       
-      if (otcServiceChargeAmount && otcServiceChargeAccountId && otcServiceChargeCurrency) {
-        orderData.serviceChargeAmount = Number(otcServiceChargeAmount);
+      const completeScBal = otcServiceChargeFundedFrom === "customer_balance";
+      const completeScAmount = Number(otcServiceChargeAmount);
+      const completeScValid =
+        otcServiceChargeAmount &&
+        otcServiceChargeCurrency &&
+        (!completeScBal ? otcServiceChargeAccountId : true) &&
+        completeScAmount !== 0;
+      if (completeScValid) {
+        orderData.serviceChargeAmount = completeScAmount;
         orderData.serviceChargeCurrency = otcServiceChargeCurrency;
-        orderData.serviceChargeAccountId = Number(otcServiceChargeAccountId);
+        orderData.serviceChargeFundedFrom = otcServiceChargeFundedFrom;
+        orderData.serviceChargeAccountId = completeScBal
+          ? (null as unknown as number)
+          : Number(otcServiceChargeAccountId);
       }
 
       if (otcEditingOrderId) {
@@ -800,6 +829,8 @@ export function useOtcOrder(
     setOtcServiceChargeCurrency,
     otcServiceChargeAccountId,
     setOtcServiceChargeAccountId,
+    otcServiceChargeFundedFrom,
+    setOtcServiceChargeFundedFrom,
     showOtcProfitSection,
     setShowOtcProfitSection,
     showOtcServiceChargeSection,

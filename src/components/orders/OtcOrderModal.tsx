@@ -92,6 +92,8 @@ type OtcOrderModalProps = {
   setOtcServiceChargeCurrency: Dispatch<SetStateAction<string>>;
   otcServiceChargeAccountId: string;
   setOtcServiceChargeAccountId: Dispatch<SetStateAction<string>>;
+  otcServiceChargeFundedFrom: "cash" | "customer_balance";
+  setOtcServiceChargeFundedFrom: Dispatch<SetStateAction<"cash" | "customer_balance">>;
   otcRemarks: string;
   setOtcRemarks: Dispatch<SetStateAction<string>>;
   showOtcRemarks: boolean;
@@ -145,6 +147,8 @@ type FormProps = {
   setOtcServiceChargeCurrency: Dispatch<SetStateAction<string>>;
   otcServiceChargeAccountId: string;
   setOtcServiceChargeAccountId: Dispatch<SetStateAction<string>>;
+  otcServiceChargeFundedFrom: "cash" | "customer_balance";
+  setOtcServiceChargeFundedFrom: Dispatch<SetStateAction<"cash" | "customer_balance">>;
   otcRemarks: string;
   setOtcRemarks: Dispatch<SetStateAction<string>>;
   showOtcRemarks: boolean;
@@ -366,6 +370,8 @@ const OtcOrderForm = ({
   setOtcServiceChargeCurrency,
   otcServiceChargeAccountId,
   setOtcServiceChargeAccountId,
+  otcServiceChargeFundedFrom,
+  setOtcServiceChargeFundedFrom,
   otcRemarks,
   setOtcRemarks,
   showOtcRemarks,
@@ -385,6 +391,7 @@ const OtcOrderForm = ({
   onRemoveRemarks,
   t,
 }: FormProps) => {
+  const isOtcScBalanceFunded = otcServiceChargeFundedFrom === "customer_balance";
   const { data: prepaidBalance } = useGetCustomerLedgerBalanceQuery(
     { customerId: Number(otcForm.customerId), currencyCode: otcForm.fromCurrency },
     { skip: !otcForm.customerId || !otcForm.fromCurrency },
@@ -1041,30 +1048,76 @@ const OtcOrderForm = ({
               {t("orders.remove")}
             </button>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-3">
             <input
               type="number"
               step="0.01"
-              placeholder={t("orders.amountNegativeIfPaidByUs")}
+              placeholder={
+                isOtcScBalanceFunded
+                  ? t("orders.amount")
+                  : t("orders.amountNegativeIfPaidByUs")
+              }
               value={otcServiceChargeAmount}
               onChange={(e) => setOtcServiceChargeAmount(e.target.value)}
-              className="rounded-lg border border-green-300 px-3 py-2"
+              className="w-full rounded-lg border border-green-300 px-3 py-2"
               onWheel={handleNumberInputWheel}
             />
-            <select
-              value={otcServiceChargeCurrency}
-              onChange={(e) => {
-                setOtcServiceChargeCurrency(e.target.value);
-                setOtcServiceChargeAccountId("");
-              }}
-              className="rounded-lg border border-green-300 px-3 py-2"
-            >
-              <option value="">{t("orders.selectCurrency")}</option>
-              {otcForm.fromCurrency && <option value={otcForm.fromCurrency}>{otcForm.fromCurrency}</option>}
-              {otcForm.toCurrency && <option value={otcForm.toCurrency}>{otcForm.toCurrency}</option>}
-            </select>
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="flex rounded-md border border-green-300 overflow-hidden text-xs font-semibold bg-white">
+                <button
+                  type="button"
+                  className={`px-3 py-2 transition-colors ${
+                    !isOtcScBalanceFunded ? "bg-green-700 text-white" : "text-green-800 hover:bg-green-100"
+                  }`}
+                  onClick={() => setOtcServiceChargeFundedFrom("cash")}
+                >
+                  {t("orders.receiptFundedCashShort")}
+                </button>
+                <button
+                  type="button"
+                  className={`px-3 py-2 transition-colors ${
+                    isOtcScBalanceFunded ? "bg-green-700 text-white" : "text-green-800 hover:bg-green-100"
+                  }`}
+                  disabled={!otcForm.customerId}
+                  onClick={() => {
+                    setOtcServiceChargeFundedFrom("customer_balance");
+                    setOtcServiceChargeAccountId("");
+                  }}
+                >
+                  {t("orders.receiptFundedBalanceShort")}
+                </button>
+              </div>
+              <select
+                value={otcServiceChargeCurrency}
+                onChange={(e) => {
+                  setOtcServiceChargeCurrency(e.target.value);
+                  setOtcServiceChargeAccountId("");
+                }}
+                className="min-w-[140px] flex-1 rounded-lg border border-green-300 px-3 py-2"
+              >
+                <option value="">{t("orders.selectCurrency")}</option>
+                {(isOtcScBalanceFunded
+                  ? otcFundingSummary.filter((c) => c.allocatable >= 0.005).map((c) => c.currencyCode)
+                  : [otcForm.fromCurrency, otcForm.toCurrency].filter(Boolean)
+                ).map((code) => (
+                  <option key={code} value={code}>
+                    {code}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
-          {otcServiceChargeCurrency && (
+          {isOtcScBalanceFunded && otcServiceChargeCurrency && (
+            <OrderLineBalanceField
+              messageKey="orders.linePrepaidBalance"
+              amount={
+                otcFundingSummary.find((c) => c.currencyCode === otcServiceChargeCurrency)?.allocatable ?? 0
+              }
+              currency={otcServiceChargeCurrency}
+              t={t}
+            />
+          )}
+          {!isOtcScBalanceFunded && otcServiceChargeCurrency && (
             <select
               className="w-full mt-3 rounded-lg border border-green-300 px-3 py-2"
               value={otcServiceChargeAccountId}
@@ -1186,6 +1239,8 @@ export default function OtcOrderModal({
   setOtcServiceChargeCurrency,
   otcServiceChargeAccountId,
   setOtcServiceChargeAccountId,
+  otcServiceChargeFundedFrom,
+  setOtcServiceChargeFundedFrom,
   otcRemarks,
   setOtcRemarks,
   showOtcRemarks,
@@ -1285,6 +1340,8 @@ export default function OtcOrderModal({
               setOtcServiceChargeCurrency={setOtcServiceChargeCurrency}
               otcServiceChargeAccountId={otcServiceChargeAccountId}
               setOtcServiceChargeAccountId={setOtcServiceChargeAccountId}
+              otcServiceChargeFundedFrom={otcServiceChargeFundedFrom}
+              setOtcServiceChargeFundedFrom={setOtcServiceChargeFundedFrom}
               otcRemarks={otcRemarks}
               setOtcRemarks={setOtcRemarks}
               showOtcRemarks={showOtcRemarks}

@@ -41,6 +41,132 @@ function trySyncCompletedOrderLedger(orderId, userId) {
   }
 }
 
+function resolveServiceChargeFunding({ fundedFrom, amount, accountId, customerId }) {
+  const parsedAmount = Number(amount);
+  if (!Number.isFinite(parsedAmount) || parsedAmount === 0) {
+    return { error: "amount must be a non-zero number" };
+  }
+
+  const normalizedFundedFrom = normalizeReceiptFundedFrom(fundedFrom);
+  if (normalizedFundedFrom === RECEIPT_FUNDED_CUSTOMER_BALANCE) {
+    if (!customerId) {
+      return { error: "Order must have a customer to use prepaid balance for service charge" };
+    }
+    return { fundedFrom: normalizedFundedFrom, accountId: null, amount: parsedAmount };
+  }
+
+  if (!accountId) {
+    return { error: "accountId is required for cash-funded service charge" };
+  }
+  return { fundedFrom: normalizedFundedFrom, accountId: Number(accountId), amount: parsedAmount };
+}
+
+function assertServiceChargeBalanceOnConfirm(serviceCharge) {
+  if (!isCustomerBalanceFunded(serviceCharge)) return null;
+  const order = db
+    .prepare("SELECT id, customerId FROM orders WHERE id = ?;")
+    .get(serviceCharge.orderId);
+  if (!order?.customerId) {
+    return { status: 400, message: "Order must have a customer to use prepaid balance for service charge" };
+  }
+  const amount = Math.abs(Number(serviceCharge.amount));
+  if (!amount) {
+    return { status: 400, message: "Service charge amount must be non-zero" };
+  }
+  try {
+    assertAllocatableBalance(
+      order.customerId,
+      serviceCharge.currencyCode,
+      amount,
+      null,
+      serviceCharge.id,
+    );
+  } catch (err) {
+    if (err.status) {
+      return { status: err.status, message: err.message };
+    }
+    throw err;
+  }
+  return null;
+}
+
+function applyCashServiceChargeAccountEffects(serviceCharge, orderId) {
+  if (isCustomerBalanceFunded(serviceCharge) || !serviceCharge.accountId) return;
+
+  const accountForBalance = db
+    .prepare("SELECT balance FROM accounts WHERE id = ?;")
+    .get(serviceCharge.accountId);
+  if (!accountForBalance) return;
+
+  const oldBalance = accountForBalance.balance;
+  const amount = Number(serviceCharge.amount);
+
+  if (amount > 0) {
+    const newBalance = oldBalance + amount;
+    db.prepare("UPDATE accounts SET balance = ? WHERE id = ?;").run(newBalance, serviceCharge.accountId);
+    db.prepare(
+      `INSERT INTO account_transactions (accountId, type, amount, description, createdAt)
+       VALUES (?, 'add', ?, ?, ?);`,
+    ).run(
+      serviceCharge.accountId,
+      amount,
+      `Order #${orderId} - Service charge`,
+      new Date().toISOString(),
+    );
+  } else if (amount < 0) {
+    const absAmount = Math.abs(amount);
+    const newBalance = oldBalance - absAmount;
+    db.prepare("UPDATE accounts SET balance = ? WHERE id = ?;").run(newBalance, serviceCharge.accountId);
+    db.prepare(
+      `INSERT INTO account_transactions (accountId, type, amount, description, createdAt)
+       VALUES (?, 'withdraw', ?, ?, ?);`,
+    ).run(
+      serviceCharge.accountId,
+      absAmount,
+      `Order #${orderId} - Service charge borne by company`,
+      new Date().toISOString(),
+    );
+  }
+}
+
+function reverseCashServiceChargeAccountEffects(serviceCharge, orderId, reasonLabel) {
+  if (isCustomerBalanceFunded(serviceCharge) || !serviceCharge.accountId) return;
+
+  const serviceChargeAmount = Number(serviceCharge.amount);
+  if (isNaN(serviceChargeAmount) || serviceChargeAmount === 0) return;
+
+  if (serviceChargeAmount > 0) {
+    db.prepare("UPDATE accounts SET balance = balance - ? WHERE id = ?;").run(
+      serviceChargeAmount,
+      serviceCharge.accountId,
+    );
+    db.prepare(
+      `INSERT INTO account_transactions (accountId, type, amount, description, createdAt)
+       VALUES (?, 'withdraw', ?, ?, ?);`,
+    ).run(
+      serviceCharge.accountId,
+      serviceChargeAmount,
+      `Order #${orderId} - Reversal of service charge (${reasonLabel})`,
+      new Date().toISOString(),
+    );
+  } else {
+    const absAmount = Math.abs(serviceChargeAmount);
+    db.prepare("UPDATE accounts SET balance = balance + ? WHERE id = ?;").run(
+      absAmount,
+      serviceCharge.accountId,
+    );
+    db.prepare(
+      `INSERT INTO account_transactions (accountId, type, amount, description, createdAt)
+       VALUES (?, 'add', ?, ?, ?);`,
+    ).run(
+      serviceCharge.accountId,
+      absAmount,
+      `Order #${orderId} - Reversal of service charge borne by company (${reasonLabel})`,
+      new Date().toISOString(),
+    );
+  }
+}
+
 const ORDER_AUDIT_FIELDS = [
   "customerId",
   "fromCurrency",
@@ -1185,20 +1311,49 @@ export const createOrder = async (req, res, next) => {
       }
     }
 
-    // Validate service charge account/currency if provided
+    // Validate service charge if provided
+    let createOrderServiceChargeFunding = null;
     if (orderData.serviceChargeAmount !== undefined && orderData.serviceChargeAmount !== null) {
-      if (!orderData.serviceChargeAccountId || !orderData.serviceChargeCurrency) {
-        return res.status(400).json({ message: "Service charge amount requires service charge account and currency" });
+      if (!orderData.serviceChargeCurrency) {
+        return res.status(400).json({ message: "Service charge amount requires service charge currency" });
       }
-      const scAccount = db.prepare("SELECT id, currencyCode FROM accounts WHERE id = ?").get(orderData.serviceChargeAccountId);
-      if (!scAccount) {
-        return res.status(400).json({ message: "Service charge account not found" });
+      createOrderServiceChargeFunding = resolveServiceChargeFunding({
+        fundedFrom: orderData.serviceChargeFundedFrom,
+        amount: orderData.serviceChargeAmount,
+        accountId: orderData.serviceChargeAccountId,
+        customerId: orderData.customerId,
+      });
+      if (createOrderServiceChargeFunding.error) {
+        return res
+          .status(createOrderServiceChargeFunding.status || 400)
+          .json({ message: createOrderServiceChargeFunding.error });
       }
-      if ((scAccount.currencyCode || "").toUpperCase() !== String(orderData.serviceChargeCurrency || "").toUpperCase()) {
-        return res.status(400).json({ message: "Service charge account currency does not match service charge currency" });
-      }
-      if (!requireAccountAccess(req, res, "serviceCharge.account", orderData.serviceChargeAccountId, "You do not have access to use this service charge account")) {
-        return;
+      if (createOrderServiceChargeFunding.accountId) {
+        const scAccount = db
+          .prepare("SELECT id, currencyCode FROM accounts WHERE id = ?")
+          .get(createOrderServiceChargeFunding.accountId);
+        if (!scAccount) {
+          return res.status(400).json({ message: "Service charge account not found" });
+        }
+        if (
+          (scAccount.currencyCode || "").toUpperCase() !==
+          String(orderData.serviceChargeCurrency || "").toUpperCase()
+        ) {
+          return res.status(400).json({
+            message: "Service charge account currency does not match service charge currency",
+          });
+        }
+        if (
+          !requireAccountAccess(
+            req,
+            res,
+            "serviceCharge.account",
+            createOrderServiceChargeFunding.accountId,
+            "You do not have access to use this service charge account",
+          )
+        ) {
+          return;
+        }
       }
     }
 
@@ -1317,50 +1472,33 @@ export const createOrder = async (req, res, next) => {
       }
       
       // Create service charge entry if provided (draft for pending, confirmed for completed)
-      if (orderData.serviceChargeAmount !== null && orderData.serviceChargeAmount !== undefined && 
-          orderData.serviceChargeCurrency && orderData.serviceChargeAccountId) {
-        const serviceChargeAmount = Number(orderData.serviceChargeAmount);
-        if (!isNaN(serviceChargeAmount) && serviceChargeAmount !== 0) {
-          db.prepare(
-            `INSERT INTO order_service_charges (orderId, amount, currencyCode, accountId, status, createdAt)
-             VALUES (?, ?, ?, ?, ?, ?);`
-          ).run(orderId, serviceChargeAmount, orderData.serviceChargeCurrency, orderData.serviceChargeAccountId, profitServiceChargeStatus, new Date().toISOString());
-          
-          // Only update account balance and create transaction if confirmed (completed order)
-          if (isImported) {
-            const scAccount = db.prepare("SELECT balance FROM accounts WHERE id = ?;").get(orderData.serviceChargeAccountId);
-            if (scAccount) {
-              const oldBalance = scAccount.balance;
-              if (serviceChargeAmount > 0) {
-                // Positive service charge: add to account
-                const newBalance = oldBalance + serviceChargeAmount;
-                db.prepare("UPDATE accounts SET balance = ? WHERE id = ?;").run(newBalance, orderData.serviceChargeAccountId);
-                db.prepare(
-                  `INSERT INTO account_transactions (accountId, type, amount, description, createdAt)
-                   VALUES (?, 'add', ?, ?, ?);`
-                ).run(
-                  orderData.serviceChargeAccountId,
-                  serviceChargeAmount,
-                  `Order #${orderId} - Service charge${importedSuffix}`,
-                  new Date().toISOString()
-                );
-              } else {
-                // Negative service charge: subtract from account
-                const absAmount = Math.abs(serviceChargeAmount);
-                const newBalance = oldBalance - absAmount;
-                db.prepare("UPDATE accounts SET balance = ? WHERE id = ?;").run(newBalance, orderData.serviceChargeAccountId);
-                db.prepare(
-                  `INSERT INTO account_transactions (accountId, type, amount, description, createdAt)
-                   VALUES (?, 'withdraw', ?, ?, ?);`
-                ).run(
-                  orderData.serviceChargeAccountId,
-                  absAmount,
-                  `Order #${orderId} - Service charge paid by us${importedSuffix}`,
-                  new Date().toISOString()
-                );
-              }
-            }
-          }
+      if (
+        createOrderServiceChargeFunding &&
+        orderData.serviceChargeCurrency
+      ) {
+        const serviceChargeAmount = createOrderServiceChargeFunding.amount;
+        db.prepare(
+          `INSERT INTO order_service_charges (orderId, amount, currencyCode, accountId, status, fundedFrom, createdAt)
+           VALUES (?, ?, ?, ?, ?, ?, ?);`,
+        ).run(
+          orderId,
+          serviceChargeAmount,
+          orderData.serviceChargeCurrency,
+          createOrderServiceChargeFunding.accountId,
+          profitServiceChargeStatus,
+          createOrderServiceChargeFunding.fundedFrom,
+          new Date().toISOString(),
+        );
+
+        if (isImported && profitServiceChargeStatus === "confirmed") {
+          applyCashServiceChargeAccountEffects(
+            {
+              accountId: createOrderServiceChargeFunding.accountId,
+              amount: serviceChargeAmount,
+              fundedFrom: createOrderServiceChargeFunding.fundedFrom,
+            },
+            orderId,
+          );
         }
       }
     }
@@ -1543,7 +1681,11 @@ export const updateOrder = async (req, res, next) => {
     const userId = getUserIdFromHeader(req);
     
     // Check if order exists and get existing profit/service charge data
-    const existingOrder = db.prepare("SELECT id, createdBy, handlerId, status, fromCurrency, toCurrency, profitAmount, profitAccountId, profitCurrency, serviceChargeAmount, serviceChargeAccountId, serviceChargeCurrency, buyAccountId, sellAccountId FROM orders WHERE id = ?").get(id);
+    const existingOrder = db
+      .prepare(
+        "SELECT id, createdBy, handlerId, status, customerId, fromCurrency, toCurrency, profitAmount, profitAccountId, profitCurrency, serviceChargeAmount, serviceChargeAccountId, serviceChargeCurrency, buyAccountId, sellAccountId FROM orders WHERE id = ?",
+      )
+      .get(id);
     if (!existingOrder) {
       return res.status(404).json({ message: "Order not found" });
     }
@@ -1578,6 +1720,7 @@ export const updateOrder = async (req, res, next) => {
       "serviceChargeAmount",
       "serviceChargeCurrency",
       "serviceChargeAccountId",
+      "serviceChargeFundedFrom",
       "profitAmount",
       "profitCurrency",
       "profitAccountId",
@@ -1667,7 +1810,16 @@ export const updateOrder = async (req, res, next) => {
 
     // Handle profit and service charge - create drafts instead of directly updating
     // Remove profit/service charge fields from alwaysUpdatableUpdates as they're handled separately
-    const { profitAmount, profitCurrency, profitAccountId, serviceChargeAmount, serviceChargeCurrency, serviceChargeAccountId, ...otherUpdates } = alwaysUpdatableUpdates;
+    const {
+      profitAmount,
+      profitCurrency,
+      profitAccountId,
+      serviceChargeAmount,
+      serviceChargeCurrency,
+      serviceChargeAccountId,
+      serviceChargeFundedFrom,
+      ...otherUpdates
+    } = alwaysUpdatableUpdates;
     
     let profitDraftCreated = false;
     let serviceChargeDraftCreated = false;
@@ -1713,19 +1865,29 @@ export const updateOrder = async (req, res, next) => {
       const deleteResult = db.prepare("DELETE FROM order_service_charges WHERE orderId = ? AND status = 'draft';").run(id);
       serviceChargeDraftDeleted = deleteResult.changes > 0;
 
-      // Create new draft service charge if all required fields are provided and amount is valid
       if (
         serviceChargeAmount !== null &&
         serviceChargeAmount !== undefined &&
-        serviceChargeCurrency &&
-        serviceChargeAccountId
+        serviceChargeCurrency
       ) {
-        const amount = Number(serviceChargeAmount);
-        if (!isNaN(amount) && amount !== 0) {
+        const funding = resolveServiceChargeFunding({
+          fundedFrom: serviceChargeFundedFrom,
+          amount: serviceChargeAmount,
+          accountId: serviceChargeAccountId,
+          customerId: existingOrder.customerId,
+        });
+        if (!funding.error) {
           const serviceChargeResult = db.prepare(
-            `INSERT INTO order_service_charges (orderId, amount, currencyCode, accountId, status, createdAt)
-             VALUES (?, ?, ?, ?, 'draft', ?);`,
-          ).run(id, amount, serviceChargeCurrency, serviceChargeAccountId, new Date().toISOString());
+            `INSERT INTO order_service_charges (orderId, amount, currencyCode, accountId, status, fundedFrom, createdAt)
+             VALUES (?, ?, ?, ?, 'draft', ?, ?);`,
+          ).run(
+            id,
+            funding.amount,
+            serviceChargeCurrency,
+            funding.accountId,
+            funding.fundedFrom,
+            new Date().toISOString(),
+          );
           serviceChargeDraftCreated = true;
           createdServiceChargeId = serviceChargeResult.lastInsertRowid;
         }
@@ -1974,50 +2136,16 @@ export const updateOrderStatus = async (req, res, next) => {
       // Confirm all draft service charge entries
       const draftServiceCharges = db.prepare("SELECT * FROM order_service_charges WHERE orderId = ? AND status = 'draft';").all(id);
       for (const serviceCharge of draftServiceCharges) {
-        if (serviceCharge.accountId) {
-          // Update service charge status to confirmed
-          db.prepare("UPDATE order_service_charges SET status = 'confirmed' WHERE id = ?;").run(serviceCharge.id);
-          
-          // Update account balance
-          const accountForBalance = db.prepare("SELECT balance FROM accounts WHERE id = ?;").get(serviceCharge.accountId);
-          if (accountForBalance) {
-            const oldBalance = accountForBalance.balance;
-            const amount = Number(serviceCharge.amount);
-            
-            if (amount > 0) {
-              // Positive service charge: add to account (we receive it)
-              const newBalance = oldBalance + amount;
-              db.prepare("UPDATE accounts SET balance = ? WHERE id = ?;").run(newBalance, serviceCharge.accountId);
-              
-              // Create account transaction
-              db.prepare(
-                `INSERT INTO account_transactions (accountId, type, amount, description, createdAt)
-                 VALUES (?, 'add', ?, ?, ?);`
-              ).run(
-                serviceCharge.accountId,
-                amount,
-                `Order #${id} - Service charge`,
-                new Date().toISOString()
-              );
-            } else if (amount < 0) {
-              // Negative service charge: subtract from account (we pay it)
-              const absAmount = Math.abs(amount);
-              const newBalance = oldBalance - absAmount;
-              db.prepare("UPDATE accounts SET balance = ? WHERE id = ?;").run(newBalance, serviceCharge.accountId);
-              
-              // Create account transaction
-              db.prepare(
-                `INSERT INTO account_transactions (accountId, type, amount, description, createdAt)
-                 VALUES (?, 'withdraw', ?, ?, ?);`
-              ).run(
-                serviceCharge.accountId,
-                absAmount,
-                `Order #${id} - Service charge paid by us`,
-                new Date().toISOString()
-              );
-            }
-          }
+        const balanceErr = assertServiceChargeBalanceOnConfirm(serviceCharge);
+        if (balanceErr) {
+          return res.status(balanceErr.status).json({ message: balanceErr.message });
         }
+        const needsAccount = !isCustomerBalanceFunded(serviceCharge);
+        if (needsAccount && !serviceCharge.accountId) {
+          return res.status(400).json({ message: "Service charge must have an account before confirmation" });
+        }
+        db.prepare("UPDATE order_service_charges SET status = 'confirmed' WHERE id = ?;").run(serviceCharge.id);
+        applyCashServiceChargeAccountEffects(serviceCharge, id);
       }
     }
 
@@ -2113,7 +2241,11 @@ function performOrderFinancialReversals(orderId, order, reasonLabel) {
     )
     .all(id);
   const confirmedProfits = db.prepare("SELECT accountId, amount FROM order_profits WHERE orderId = ? AND status = 'confirmed';").all(id);
-  const confirmedServiceCharges = db.prepare("SELECT accountId, amount FROM order_service_charges WHERE orderId = ? AND status = 'confirmed';").all(id);
+  const confirmedServiceCharges = db
+    .prepare(
+      "SELECT accountId, amount, fundedFrom FROM order_service_charges WHERE orderId = ? AND status = 'confirmed';",
+    )
+    .all(id);
 
   const isCompleted = order.status === "completed";
   const hasDirectTransactions = isCompleted && (order.buyAccountId || order.sellAccountId);
@@ -2223,33 +2355,7 @@ function performOrderFinancialReversals(orderId, order, reasonLabel) {
         : [];
 
   serviceChargeReversals.forEach((serviceCharge) => {
-    const serviceChargeAmount = Number(serviceCharge.amount);
-    if (serviceCharge.accountId && !isNaN(serviceChargeAmount) && serviceChargeAmount !== 0) {
-      if (serviceChargeAmount > 0) {
-        db.prepare("UPDATE accounts SET balance = balance - ? WHERE id = ?;").run(serviceChargeAmount, serviceCharge.accountId);
-        db.prepare(
-          `INSERT INTO account_transactions (accountId, type, amount, description, createdAt)
-           VALUES (?, 'withdraw', ?, ?, ?);`
-        ).run(
-          serviceCharge.accountId,
-          serviceChargeAmount,
-          `Order #${id} - Reversal of service charge (${reasonLabel})`,
-          new Date().toISOString()
-        );
-      } else {
-        const absAmount = Math.abs(serviceChargeAmount);
-        db.prepare("UPDATE accounts SET balance = balance + ? WHERE id = ?;").run(absAmount, serviceCharge.accountId);
-        db.prepare(
-          `INSERT INTO account_transactions (accountId, type, amount, description, createdAt)
-           VALUES (?, 'add', ?, ?, ?);`
-        ).run(
-          serviceCharge.accountId,
-          absAmount,
-          `Order #${id} - Reversal of service charge paid by us (${reasonLabel})`,
-          new Date().toISOString()
-        );
-      }
-    }
+    reverseCashServiceChargeAccountEffects(serviceCharge, id, reasonLabel);
   });
 
   const affectedAccountIds = new Set();
@@ -3915,7 +4021,7 @@ export const confirmProfit = (req, res, next) => {
 export const updateServiceCharge = (req, res, next) => {
   try {
     const { serviceChargeId } = req.params;
-    const { amount, accountId, currencyCode } = req.body;
+    const { amount, accountId, currencyCode, fundedFrom: fundedFromRaw } = req.body;
     const userId = getUserIdFromHeader(req);
 
     // Check if service charge exists and is a draft
@@ -3947,35 +4053,67 @@ export const updateServiceCharge = (req, res, next) => {
       return res.status(400).json({ message: "Only draft service charges can be updated" });
     }
 
-    // Validate account if provided
-    let accountIdToUse = existingServiceCharge.accountId;
-    if (accountId !== undefined && accountId !== null && accountId !== "") {
-      const scAccount = db.prepare("SELECT id, currencyCode FROM accounts WHERE id = ?;").get(Number(accountId));
+    const serviceChargeAmount =
+      amount !== undefined ? parseFloat(amount) : existingServiceCharge.amount;
+    const serviceChargeCurrency = currencyCode || existingServiceCharge.currencyCode;
+    const fundedFrom =
+      fundedFromRaw !== undefined
+        ? normalizeReceiptFundedFrom(fundedFromRaw)
+        : normalizeReceiptFundedFrom(existingServiceCharge.fundedFrom);
+    const orderForSc = db
+      .prepare("SELECT customerId FROM orders WHERE id = ?;")
+      .get(existingServiceCharge.orderId);
+    const accountIdInput =
+      accountId !== undefined
+        ? accountId === null || accountId === ""
+          ? null
+          : Number(accountId)
+        : existingServiceCharge.accountId;
+    const funding = resolveServiceChargeFunding({
+      fundedFrom,
+      amount: serviceChargeAmount,
+      accountId: accountIdInput,
+      customerId: orderForSc?.customerId,
+    });
+    if (funding.error) {
+      return res.status(funding.status || 400).json({ message: funding.error });
+    }
+
+    if (funding.accountId) {
+      const scAccount = db
+        .prepare("SELECT id, currencyCode FROM accounts WHERE id = ?;")
+        .get(funding.accountId);
       if (!scAccount) {
         return res.status(400).json({ message: "Service charge account not found" });
       }
-      const currencyToCheck = currencyCode || existingServiceCharge.currencyCode;
-      if (scAccount.currencyCode !== currencyToCheck) {
-        return res.status(400).json({ 
-          message: `Service charge account currency (${scAccount.currencyCode}) does not match service charge currency (${currencyToCheck})` 
+      if (scAccount.currencyCode !== serviceChargeCurrency) {
+        return res.status(400).json({
+          message: `Service charge account currency (${scAccount.currencyCode}) does not match service charge currency (${serviceChargeCurrency})`,
         });
       }
-      accountIdToUse = Number(accountId);
+      if (
+        !requireAccountAccess(
+          req,
+          res,
+          "serviceCharge.account",
+          funding.accountId,
+          "You do not have access to use this service charge account",
+        )
+      ) {
+        return;
+      }
     }
 
-    const serviceChargeAmount = amount !== undefined ? parseFloat(amount) : existingServiceCharge.amount;
-    const serviceChargeCurrency = currencyCode || existingServiceCharge.currencyCode;
-
-    // Update service charge
     db.prepare(
       `UPDATE order_service_charges 
-       SET amount = @amount, accountId = @accountId, currencyCode = @currencyCode
-       WHERE id = @id;`
+       SET amount = @amount, accountId = @accountId, currencyCode = @currencyCode, fundedFrom = @fundedFrom
+       WHERE id = @id;`,
     ).run({
       id: serviceChargeId,
-      amount: serviceChargeAmount,
-      accountId: accountIdToUse,
+      amount: funding.amount,
+      accountId: funding.accountId,
       currencyCode: serviceChargeCurrency,
+      fundedFrom: funding.fundedFrom,
     });
 
     const updatedServiceCharge = db
@@ -4011,35 +4149,12 @@ export const deleteServiceCharge = (req, res, next) => {
       if (!canEditAnyOrder(userPermissions)) {
         return res.status(400).json({ message: "Only draft service charges can be deleted" });
       }
-      // Reverse the balance change that was applied when this service charge was confirmed
-      if (serviceCharge.accountId && shouldReverseConfirmedEntryOnDelete(serviceCharge.orderId)) {
-        const amount = Number(serviceCharge.amount);
-        if (amount > 0) {
-          // Was added to account (positive SC), so subtract it back
-          db.prepare("UPDATE accounts SET balance = balance - ? WHERE id = ?;").run(amount, serviceCharge.accountId);
-          db.prepare(
-            `INSERT INTO account_transactions (accountId, type, amount, description, createdAt)
-             VALUES (?, 'subtract', ?, ?, ?);`
-          ).run(
-            serviceCharge.accountId,
-            amount,
-            `Order #${serviceCharge.orderId} - Service charge reversal (edit)`,
-            new Date().toISOString()
-          );
-        } else if (amount < 0) {
-          // Was subtracted from account (negative SC), so add it back
-          const absAmount = Math.abs(amount);
-          db.prepare("UPDATE accounts SET balance = balance + ? WHERE id = ?;").run(absAmount, serviceCharge.accountId);
-          db.prepare(
-            `INSERT INTO account_transactions (accountId, type, amount, description, createdAt)
-             VALUES (?, 'add', ?, ?, ?);`
-          ).run(
-            serviceCharge.accountId,
-            absAmount,
-            `Order #${serviceCharge.orderId} - Service charge reversal (edit)`,
-            new Date().toISOString()
-          );
-        }
+      if (shouldReverseConfirmedEntryOnDelete(serviceCharge.orderId)) {
+        reverseCashServiceChargeAccountEffects(
+          serviceCharge,
+          serviceCharge.orderId,
+          "edit",
+        );
       }
     }
 
@@ -4072,62 +4187,30 @@ export const confirmServiceCharge = (req, res, next) => {
       return res.status(400).json({ message: "Only draft service charges can be confirmed" });
     }
 
-    if (!serviceCharge.accountId) {
+    const balanceErr = assertServiceChargeBalanceOnConfirm(serviceCharge);
+    if (balanceErr) {
+      return res.status(balanceErr.status).json({ message: balanceErr.message });
+    }
+
+    if (!isCustomerBalanceFunded(serviceCharge) && !serviceCharge.accountId) {
       return res.status(400).json({ message: "Service charge must have an account before confirmation" });
     }
 
-    // Update service charge status to confirmed
-    db.prepare("UPDATE order_service_charges SET status = 'confirmed' WHERE id = ?;").run(serviceChargeId);
+    if (
+      !isCustomerBalanceFunded(serviceCharge) &&
+      !requireAccountAccess(
+        req,
+        res,
+        "serviceCharge.account",
+        serviceCharge.accountId,
+        "You do not have access to confirm this service charge account",
+      )
+    ) {
+      return;
+    }
 
-    // Update account balance and create transaction
-    const accountForBalance = db.prepare("SELECT balance FROM accounts WHERE id = ?;").get(serviceCharge.accountId);
-    if (!accountForBalance) {
-      return res.status(400).json({ message: "Service charge account not found" });
-    }
-    
-    const oldBalance = accountForBalance.balance;
-    const amount = Number(serviceCharge.amount);
-    
-    if (amount > 0) {
-      // Positive service charge: add to account (we receive it)
-      const newBalance = oldBalance + amount;
-      db.prepare("UPDATE accounts SET balance = ? WHERE id = ?;").run(newBalance, serviceCharge.accountId);
-      
-      // Create account transaction
-      const transactionResult = db.prepare(
-        `INSERT INTO account_transactions (accountId, type, amount, description, createdAt)
-         VALUES (?, 'add', ?, ?, ?);`
-      ).run(
-        serviceCharge.accountId,
-        amount,
-        `Order #${serviceCharge.orderId} - Service charge`,
-        new Date().toISOString()
-      );
-      
-      if (!transactionResult.lastInsertRowid) {
-        console.error("Failed to create account transaction for service charge:", serviceChargeId);
-      }
-    } else if (amount < 0) {
-      // Negative service charge: subtract from account (we pay it)
-      const absAmount = Math.abs(amount);
-      const newBalance = oldBalance - absAmount;
-      db.prepare("UPDATE accounts SET balance = ? WHERE id = ?;").run(newBalance, serviceCharge.accountId);
-      
-      // Create account transaction
-      const transactionResult = db.prepare(
-        `INSERT INTO account_transactions (accountId, type, amount, description, createdAt)
-         VALUES (?, 'withdraw', ?, ?, ?);`
-      ).run(
-        serviceCharge.accountId,
-        absAmount,
-        `Order #${serviceCharge.orderId} - Service charge paid by us`,
-        new Date().toISOString()
-      );
-      
-      if (!transactionResult.lastInsertRowid) {
-        console.error("Failed to create account transaction for service charge:", serviceChargeId);
-      }
-    }
+    db.prepare("UPDATE order_service_charges SET status = 'confirmed' WHERE id = ?;").run(serviceChargeId);
+    applyCashServiceChargeAccountEffects(serviceCharge, serviceCharge.orderId);
 
     // Get updated service charge
     const confirmedServiceCharge = db
@@ -4140,6 +4223,13 @@ export const confirmServiceCharge = (req, res, next) => {
       .get(serviceChargeId);
 
     res.json(confirmedServiceCharge);
+    const orderForSync = db.prepare("SELECT customerId FROM orders WHERE id = ?;").get(serviceCharge.orderId);
+    if (orderForSync?.customerId) {
+      scheduleCacheSync({
+        scopes: ["customerLedger"],
+        customerId: orderForSync.customerId,
+      });
+    }
     trySyncCompletedOrderLedger(Number(serviceCharge.orderId), userId);
     notifyOrderFinancial(
       Number(serviceCharge.orderId),
@@ -4202,12 +4292,12 @@ export const addProfitToOrder = async (req, res, next) => {
 export const addServiceChargeToOrder = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { amount, currencyCode, accountId } = req.body;
+    const { amount, currencyCode, accountId, fundedFrom: fundedFromRaw } = req.body;
     const userId = getUserIdFromHeader(req);
 
     if (!userId) return res.status(401).json({ message: "User ID is required" });
 
-    const order = db.prepare("SELECT id, createdBy, handlerId FROM orders WHERE id = ?;").get(id);
+    const order = db.prepare("SELECT id, createdBy, handlerId, customerId FROM orders WHERE id = ?;").get(id);
     if (!order) return res.status(404).json({ message: "Order not found" });
 
     const userPermissions = getUserPermissions(userId);
@@ -4215,21 +4305,54 @@ export const addServiceChargeToOrder = async (req, res, next) => {
       return res.status(403).json({ message: "You do not have permission to add service charges to this order" });
     }
 
-    if (!amount || !currencyCode || !accountId) {
-      return res.status(400).json({ message: "amount, currencyCode, and accountId are required" });
-    }
-    const parsedAmount = Number(amount);
-    if (isNaN(parsedAmount) || parsedAmount === 0) {
-      return res.status(400).json({ message: "amount must be a non-zero number" });
+    if (!amount || !currencyCode) {
+      return res.status(400).json({ message: "amount and currencyCode are required" });
     }
 
-    const account = db.prepare("SELECT id FROM accounts WHERE id = ?;").get(Number(accountId));
-    if (!account) return res.status(400).json({ message: "Account not found" });
+    const funding = resolveServiceChargeFunding({
+      fundedFrom: fundedFromRaw,
+      amount,
+      accountId,
+      customerId: order.customerId,
+    });
+    if (funding.error) {
+      return res.status(funding.status || 400).json({ message: funding.error });
+    }
+
+    if (funding.accountId) {
+      const account = db
+        .prepare("SELECT id, currencyCode FROM accounts WHERE id = ?;")
+        .get(funding.accountId);
+      if (!account) return res.status(400).json({ message: "Account not found" });
+      if (account.currencyCode !== currencyCode) {
+        return res.status(400).json({
+          message: `Service charge account currency (${account.currencyCode}) does not match service charge currency (${currencyCode})`,
+        });
+      }
+      if (
+        !requireAccountAccess(
+          req,
+          res,
+          "serviceCharge.account",
+          funding.accountId,
+          "You do not have access to use this service charge account",
+        )
+      ) {
+        return;
+      }
+    }
 
     const result = db.prepare(
-      `INSERT INTO order_service_charges (orderId, amount, currencyCode, accountId, status, createdAt)
-       VALUES (?, ?, ?, ?, 'draft', ?);`
-    ).run(Number(id), parsedAmount, currencyCode, Number(accountId), new Date().toISOString());
+      `INSERT INTO order_service_charges (orderId, amount, currencyCode, accountId, status, fundedFrom, createdAt)
+       VALUES (?, ?, ?, ?, 'draft', ?, ?);`,
+    ).run(
+      Number(id),
+      funding.amount,
+      currencyCode,
+      funding.accountId,
+      funding.fundedFrom,
+      new Date().toISOString(),
+    );
 
     const sc = db.prepare(
       `SELECT sc.*, a.name as accountName

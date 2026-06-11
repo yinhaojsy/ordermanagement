@@ -1,4 +1,5 @@
 import { useState, useCallback } from "react";
+import type { ReceiptFundedFrom } from "../../types";
 
 export interface UploadItem {
   image: string;
@@ -17,6 +18,7 @@ export function useViewOrderModal() {
   const [serviceChargeAmount, setServiceChargeAmount] = useState<string>("");
   const [serviceChargeCurrency, setServiceChargeCurrency] = useState<string>("");
   const [serviceChargeAccountId, setServiceChargeAccountId] = useState<string>("");
+  const [serviceChargeFundedFrom, setServiceChargeFundedFrom] = useState<ReceiptFundedFrom>("cash");
   const [showProfitSection, setShowProfitSection] = useState(false);
   const [showServiceChargeSection, setShowServiceChargeSection] = useState(false);
 
@@ -31,6 +33,7 @@ export function useViewOrderModal() {
     setServiceChargeAmount("");
     setServiceChargeCurrency("");
     setServiceChargeAccountId("");
+    setServiceChargeFundedFrom("cash");
     setShowProfitSection(false);
     setShowServiceChargeSection(false);
     setRemarks("");
@@ -55,6 +58,8 @@ export function useViewOrderModal() {
     setServiceChargeCurrency,
     serviceChargeAccountId,
     setServiceChargeAccountId,
+    serviceChargeFundedFrom,
+    setServiceChargeFundedFrom,
     showProfitSection,
     setShowProfitSection,
     showServiceChargeSection,

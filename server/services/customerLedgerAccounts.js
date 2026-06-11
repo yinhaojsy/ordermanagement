@@ -70,6 +70,27 @@ function sumReservedBalancePayments(customerId, currencyCode, excludePaymentId =
   return Number(reserved?.total ?? 0);
 }
 
+function sumReservedBalanceServiceCharges(customerId, currencyCode, excludeServiceChargeId = null) {
+  const reserved = db
+    .prepare(
+      `SELECT COALESCE(SUM(ABS(sc.amount)), 0) AS total
+       FROM order_service_charges sc
+       INNER JOIN orders o ON o.id = sc.orderId
+       WHERE o.customerId = ?
+         AND sc.currencyCode = ?
+         AND sc.fundedFrom = 'customer_balance'
+         AND sc.status = 'confirmed'
+         AND o.status NOT IN ('completed', 'cancelled')
+         ${excludeServiceChargeId ? "AND sc.id != ?" : ""};`,
+    )
+    .get(
+      ...(excludeServiceChargeId
+        ? [customerId, currencyCode, excludeServiceChargeId]
+        : [customerId, currencyCode]),
+    );
+  return Number(reserved?.total ?? 0);
+}
+
 /** Prepaid applied on completed orders (Bal receipts). */
 function sumConsumedPrepaidReceipts(customerId, currencyCode) {
   const row = db
@@ -81,6 +102,23 @@ function sumConsumedPrepaidReceipts(customerId, currencyCode) {
          AND o.fromCurrency = ?
          AND r.fundedFrom = 'customer_balance'
          AND r.status = 'confirmed'
+         AND o.status = 'completed';`,
+    )
+    .get(customerId, currencyCode);
+  return Number(row?.total ?? 0);
+}
+
+/** Prepaid service charges applied on completed orders (Bal SC). */
+function sumConsumedPrepaidServiceCharges(customerId, currencyCode) {
+  const row = db
+    .prepare(
+      `SELECT COALESCE(SUM(ABS(sc.amount)), 0) AS total
+       FROM order_service_charges sc
+       INNER JOIN orders o ON o.id = sc.orderId
+       WHERE o.customerId = ?
+         AND sc.currencyCode = ?
+         AND sc.fundedFrom = 'customer_balance'
+         AND sc.status = 'confirmed'
          AND o.status = 'completed';`,
     )
     .get(customerId, currencyCode);
@@ -191,19 +229,38 @@ export function buildEffectiveFundedBalanceByCustomerCurrency() {
 export function getEffectiveFundedBalance(customerId, currencyCode) {
   const manual = getFundedCustomerCurrencyBalance(customerId, currencyCode);
   const consumedReceipts = sumConsumedPrepaidReceipts(customerId, currencyCode);
+  const consumedServiceCharges = sumConsumedPrepaidServiceCharges(customerId, currencyCode);
   const consumedPayments = sumConsumedAdvancePayments(customerId, currencyCode);
-  return manual - consumedReceipts + consumedPayments;
+  return manual - consumedReceipts - consumedServiceCharges + consumedPayments;
 }
 
 /** Prepaid (deposit) balance available for receipt Bal. */
-export function getAllocatableCustomerBalance(customerId, currencyCode, excludeReceiptId = null) {
+export function getAllocatableCustomerBalance(
+  customerId,
+  currencyCode,
+  excludeReceiptId = null,
+  excludeServiceChargeId = null,
+) {
   const effective = getEffectiveFundedBalance(customerId, currencyCode);
-  const reserved = sumReservedBalanceReceipts(customerId, currencyCode, excludeReceiptId);
+  const reserved =
+    sumReservedBalanceReceipts(customerId, currencyCode, excludeReceiptId) +
+    sumReservedBalanceServiceCharges(customerId, currencyCode, excludeServiceChargeId);
   return Math.max(0, effective - reserved);
 }
 
-export function assertAllocatableBalance(customerId, currencyCode, amount, excludeReceiptId = null) {
-  const available = getAllocatableCustomerBalance(customerId, currencyCode, excludeReceiptId);
+export function assertAllocatableBalance(
+  customerId,
+  currencyCode,
+  amount,
+  excludeReceiptId = null,
+  excludeServiceChargeId = null,
+) {
+  const available = getAllocatableCustomerBalance(
+    customerId,
+    currencyCode,
+    excludeReceiptId,
+    excludeServiceChargeId,
+  );
   if (amount > available + 1e-9) {
     const err = new Error(
       `Insufficient customer prepaid balance. Available: ${available.toFixed(2)} ${currencyCode}`,

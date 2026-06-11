@@ -441,6 +441,8 @@ export default function OrdersPage() {
     setServiceChargeCurrency,
     serviceChargeAccountId,
     setServiceChargeAccountId,
+    serviceChargeFundedFrom,
+    setServiceChargeFundedFrom,
     showProfitSection,
     setShowProfitSection,
     showServiceChargeSection,
@@ -553,11 +555,15 @@ export default function OrdersPage() {
                         {serviceCharge.amount > 0 ? "+" : ""}
                         {serviceCharge.amount.toFixed(2)} {serviceCharge.currencyCode || ""}
                       </div>
-                      {serviceCharge.accountName && (
+                      {serviceCharge.fundedFrom === "customer_balance" ? (
+                        <div className="text-slate-500">
+                          {t("orders.serviceChargeFundedFromBalance")}
+                        </div>
+                      ) : serviceCharge.accountName ? (
                         <div className="text-slate-500">
                           {t("orders.account")}: {serviceCharge.accountName}
                         </div>
-                      )}
+                      ) : null}
                     </div>
                   </div>
                   {serviceCharge.status === 'draft' && (
@@ -628,6 +634,8 @@ export default function OrdersPage() {
               setServiceChargeCurrency={setServiceChargeCurrency}
               serviceChargeAccountId={serviceChargeAccountId}
               setServiceChargeAccountId={setServiceChargeAccountId}
+              serviceChargeFundedFrom={serviceChargeFundedFrom}
+              setServiceChargeFundedFrom={setServiceChargeFundedFrom}
               showServiceChargeSection={showServiceChargeSection}
               setShowServiceChargeSection={setShowServiceChargeSection}
               updateOrder={updateOrder}

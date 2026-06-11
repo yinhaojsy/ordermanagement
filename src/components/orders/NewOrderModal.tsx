@@ -777,17 +777,76 @@ export default function NewOrderModal({
                   />
                   )}
                   {isServiceCharge && (
+                    <div className="flex shrink-0 rounded-md border border-slate-200 overflow-hidden text-xs font-semibold">
+                      <button
+                        type="button"
+                        className={`px-2.5 py-1.5 transition-colors ${
+                          (line.fundedFrom ?? "cash") === "cash"
+                            ? "bg-slate-700 text-white"
+                            : "text-slate-600 hover:bg-slate-50"
+                        }`}
+                        title={t("orders.receiptFundedCash")}
+                        onClick={() => updateLine(line.localId, { fundedFrom: "cash" })}
+                      >
+                        {t("orders.receiptFundedCashShort")}
+                      </button>
+                      <button
+                        type="button"
+                        className={`px-2.5 py-1.5 transition-colors ${
+                          (line.fundedFrom ?? "cash") === "customer_balance"
+                            ? "bg-slate-700 text-white"
+                            : "text-slate-600 hover:bg-slate-50"
+                        }`}
+                        title={t("orders.serviceChargeFundedBalance")}
+                        disabled={!selectedCustomerId}
+                        onClick={() =>
+                          updateLine(line.localId, {
+                            fundedFrom: "customer_balance",
+                            accountId: "",
+                          })
+                        }
+                      >
+                        {t("orders.receiptFundedBalanceShort")}
+                      </button>
+                    </div>
+                  )}
+                  {isServiceCharge && (
                     <select
                       className="rounded border border-slate-200 px-2 py-1.5 text-sm text-slate-700 bg-white"
                       value={line.serviceChargeCurrency ?? ""}
-                      onChange={(e) => updateLine(line.localId, { serviceChargeCurrency: e.target.value, accountId: "" })}
+                      onChange={(e) =>
+                        updateLine(line.localId, {
+                          serviceChargeCurrency: e.target.value,
+                          accountId: "",
+                        })
+                      }
                     >
                       <option value="">{t("orders.selectCurrency")}</option>
-                      {activeCurrencies.map((c) => (
-                        <option key={c.code} value={c.code}>{c.code}</option>
+                      {((line.fundedFrom ?? "cash") === "customer_balance"
+                        ? (fundingSummary ?? [])
+                            .filter((c) => c.allocatable >= 0.005)
+                            .map((c) => c.currencyCode)
+                        : activeCurrencies.map((c) => c.code)
+                      ).map((code) => (
+                        <option key={code} value={code}>
+                          {code}
+                        </option>
                       ))}
                     </select>
                   )}
+                  {isServiceCharge &&
+                    (line.fundedFrom ?? "cash") === "customer_balance" &&
+                    line.serviceChargeCurrency && (
+                      <OrderLineBalanceField
+                        messageKey="orders.linePrepaidBalance"
+                        amount={
+                          fundingSummary?.find((c) => c.currencyCode === line.serviceChargeCurrency)
+                            ?.allocatable ?? 0
+                        }
+                        currency={line.serviceChargeCurrency}
+                        t={t}
+                      />
+                    )}
                   {line.kind === "receipt" && (
                     <div className="flex shrink-0 rounded-md border border-slate-200 overflow-hidden text-xs font-semibold">
                       <button
@@ -873,8 +932,7 @@ export default function NewOrderModal({
                         t={t}
                       />
                     )}
-                  {(line.kind === "service_charge" ||
-                    (line.fundedFrom ?? "cash") === "cash") && (
+                  {(line.kind === "profit" || (line.fundedFrom ?? "cash") === "cash") && (
                     <div className="min-w-[240px] flex-[1_1_240px] [&_input]:py-1.5 [&_input]:text-sm">
                       <AccountSelect
                         value={line.accountId}

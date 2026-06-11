@@ -44,7 +44,7 @@ export function getOrderFinancialTotals(orderId) {
 
   const scRows = db
     .prepare(
-      `SELECT currencyCode, amount
+      `SELECT currencyCode, amount, fundedFrom
        FROM order_service_charges
        WHERE orderId = ? AND status = 'confirmed';`,
     )
@@ -53,12 +53,15 @@ export function getOrderFinancialTotals(orderId) {
   let serviceCharges = scRows.map((r) => ({
     currencyCode: r.currencyCode,
     amount: Number(r.amount),
+    fundedFrom: r.fundedFrom === "customer_balance" ? "customer_balance" : "cash",
   }));
 
   if (serviceCharges.length === 0 && order.serviceChargeAmount != null) {
     const legacyAmt = Number(order.serviceChargeAmount);
     if (!Number.isNaN(legacyAmt) && legacyAmt !== 0 && order.serviceChargeCurrency) {
-      serviceCharges = [{ currencyCode: order.serviceChargeCurrency, amount: legacyAmt }];
+      serviceCharges = [
+        { currencyCode: order.serviceChargeCurrency, amount: legacyAmt, fundedFrom: "cash" },
+      ];
     }
   }
 
@@ -218,13 +221,11 @@ function postServiceChargeLegs({
   for (const sc of serviceCharges) {
     const abs = Math.abs(sc.amount);
     if (abs <= 0) continue;
-    const type = invert
-      ? sc.amount > 0
-        ? "credit"
-        : "debit"
-      : sc.amount > 0
-        ? "debit"
-        : "credit";
+    const fundedFrom = sc.fundedFrom === "customer_balance" ? "customer_balance" : "cash";
+    // Bal: always debit prepaid. New + positive: debit. New + negative: company bears fee — no ledger leg.
+    const postsLedger = fundedFrom === "customer_balance" || sc.amount > 0;
+    if (!postsLedger) continue;
+    const type = invert ? "credit" : "debit";
     insertLedgerLeg({
       customerId,
       orderId,

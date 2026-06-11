@@ -1379,7 +1379,13 @@ export const api = createApi({
     }),
     addServiceChargeToOrder: builder.mutation<
       OrderServiceCharge,
-      { orderId: number; amount: number; currencyCode: string; accountId: number }
+      {
+        orderId: number;
+        amount: number;
+        currencyCode: string;
+        accountId?: number;
+        fundedFrom?: ReceiptFundedFrom;
+      }
     >({
       query: ({ orderId, ...body }) => ({
         url: `orders/${orderId}/service-charges`,
@@ -1393,7 +1399,13 @@ export const api = createApi({
     }),
     updateServiceCharge: builder.mutation<
       OrderServiceCharge,
-      { serviceChargeId: number; amount?: number; accountId?: number; currencyCode?: string }
+      {
+        serviceChargeId: number;
+        amount?: number;
+        accountId?: number | null;
+        currencyCode?: string;
+        fundedFrom?: ReceiptFundedFrom;
+      }
     >({
       query: ({ serviceChargeId, ...body }) => ({
         url: `orders/service-charges/${serviceChargeId}`,

@@ -320,8 +320,9 @@ export interface OrderServiceCharge {
   orderId: number;
   amount: number;
   currencyCode: string;
-  accountId: number;
+  accountId?: number | null;
   accountName?: string;
+  fundedFrom?: ReceiptFundedFrom;
   status: "draft" | "confirmed";
   createdAt: string;
 }
