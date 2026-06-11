@@ -9,7 +9,7 @@ import {
   useGetWalletAddressAmlReportsQuery,
   useRecheckAmlMutation,
 } from "../../services/api";
-import { formatUsdVolume, parseAmlReport } from "../../utils/amlReportParser";
+import { formatFiatAmount, parseAmlReport } from "../../utils/amlReportParser";
 
 type Tone = "emerald" | "amber" | "rose" | "slate" | "blue";
 type WalletTab = "screen" | "investigate";
@@ -519,13 +519,13 @@ function AmlReportContent({
           <div>
             <div className="text-xs text-slate-500">{t("aml.fiatReceived")}</div>
             <div className="font-semibold text-slate-900">
-              {formatUsdVolume(parsed.receivedFiatAmount)}
+              {formatFiatAmount(parsed.receivedFiatAmount)}
             </div>
           </div>
           <div>
             <div className="text-xs text-slate-500">{t("aml.fiatSent")}</div>
             <div className="font-semibold text-slate-900">
-              {formatUsdVolume(parsed.sentFiatAmount)}
+              {formatFiatAmount(parsed.sentFiatAmount)}
             </div>
           </div>
           {parsed.directConnectionCount > 0 ? (

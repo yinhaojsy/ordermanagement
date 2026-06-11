@@ -385,9 +385,18 @@ export async function autoScreenNewWallet(walletId, userId) {
 
 export async function autoScreenNewTransaction(walletId, transactionId, userId) {
   if (!getActiveAmlCredentials()) return null;
-  const wallet = db.prepare("SELECT amlAutoScreenTx FROM tron_wallets WHERE id = ?").get(walletId);
+  const wallet = db
+    .prepare("SELECT amlAutoScreenTx, createdAt FROM tron_wallets WHERE id = ?")
+    .get(walletId);
   if (!wallet || wallet.amlAutoScreenTx === 0) return null;
   if (hasTransactionCheck(transactionId)) return null;
+
+  const tx = db
+    .prepare("SELECT timestamp FROM tron_wallet_transactions WHERE id = ? AND walletId = ?")
+    .get(transactionId, walletId);
+  if (!tx) return null;
+  if (new Date(tx.timestamp).getTime() < new Date(wallet.createdAt).getTime()) return null;
+
   try {
     return await checkWalletTransaction(walletId, transactionId, { userId });
   } catch (err) {

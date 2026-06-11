@@ -1337,7 +1337,7 @@
     "noHistory": "此钱包暂无筛查记录。",
     "actionFailed": "AML 检查失败。",
     "autoScreenTx": "自动筛查新交易",
-    "autoScreenTxHint": "新交易入库时自动筛查（每笔 1 积分）。手动筛查不受影响。",
+    "autoScreenTxHint": "仅自动筛查添加钱包之后发生的新交易（每笔 1 积分）。历史交易不会自动筛查，可在日志中手动筛查。",
     "tabScreen": "筛查",
     "tabInvestigate": "深度调查",
     "noScreenReport": "此钱包暂无筛查报告。",

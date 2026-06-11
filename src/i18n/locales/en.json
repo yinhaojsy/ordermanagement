@@ -1411,7 +1411,7 @@
     "noHistory": "No screenings yet for this wallet.",
     "actionFailed": "AML check failed.",
     "autoScreenTx": "Auto-screen new tx",
-    "autoScreenTxHint": "Automatically screen new transactions (1 credit each). Manual screening is always available.",
+    "autoScreenTxHint": "Automatically screen transactions that occur after this wallet is added (1 credit each). History is not auto-screened; use Logs to screen manually.",
     "tabScreen": "Screening",
     "tabInvestigate": "Investigation",
     "noScreenReport": "No screening report yet for this wallet.",

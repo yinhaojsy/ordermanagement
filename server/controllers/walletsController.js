@@ -295,7 +295,7 @@ export const createWallet = async (req, res, next) => {
       );
 
       for (const tx of transactions) {
-        const txResult = insertTx.run(
+        insertTx.run(
           result.lastInsertRowid,
           tx.transactionHash,
           tx.transactionType,
@@ -306,11 +306,6 @@ export const createWallet = async (req, res, next) => {
           tx.blockNumber,
           new Date().toISOString()
         );
-        if (txResult.changes > 0) {
-          autoScreenNewTransaction(result.lastInsertRowid, txResult.lastInsertRowid, req.user?.id).catch(
-            (err) => console.error("AML auto-screen initial tx failed:", err.message),
-          );
-        }
       }
     } catch (error) {
       console.error("Failed to fetch initial transactions:", error);
