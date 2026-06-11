@@ -1,12 +1,13 @@
 import Badge from "../common/Badge";
 import type { AmlCheck } from "../../types/integrations";
+import { isAmlProviderFlagged } from "../../utils/amlProviderFlag";
 
 type Tone = "emerald" | "amber" | "rose" | "slate" | "blue";
 
 function riskTone(check: AmlCheck | null | undefined): Tone {
   if (!check) return "slate";
   if (check.isPending || check.status === "pending") return "blue";
-  if (check.isBlacklisted || check.riskLevel === "severe" || check.riskLevel === "high") return "rose";
+  if (isAmlProviderFlagged(check) || check.riskLevel === "severe" || check.riskLevel === "high") return "rose";
   if (check.riskLevel === "medium") return "amber";
   if (check.riskLevel === "low" || check.riskLevel === "none") return "emerald";
   return "slate";
@@ -15,7 +16,7 @@ function riskTone(check: AmlCheck | null | undefined): Tone {
 function riskLabel(check: AmlCheck | null | undefined, notScreened: string, screening: string): string {
   if (!check) return notScreened;
   if (check.isPending || check.status === "pending") return screening;
-  if (check.isBlacklisted) return "AML flagged";
+  if (isAmlProviderFlagged(check)) return "AML flagged";
   if (check.riskPercent != null) {
     const level = check.riskLevel !== "pending" ? ` ${check.riskLevel}` : "";
     return `${check.riskPercent}%${level}`;

@@ -2,13 +2,9 @@ import { useTranslation } from "react-i18next";
 import Badge from "../common/Badge";
 import type { AmlCheck } from "../../types/integrations";
 import type { TronWallet } from "../../types/wallets";
+import { isAmlProviderFlagged } from "../../utils/amlProviderFlag";
 
 type Tone = "emerald" | "amber" | "rose" | "slate";
-
-function isAmlProviderFlagged(check: AmlCheck | null | undefined): boolean {
-  if (!check || check.isPending) return false;
-  return check.isBlacklisted;
-}
 
 export default function WalletBlacklistBadges({
   wallet,

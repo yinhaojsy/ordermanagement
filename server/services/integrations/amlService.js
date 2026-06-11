@@ -48,20 +48,55 @@ function parseSignals(data) {
     .sort((a, b) => b.percent - a.percent);
 }
 
-function normalizeAmlResponse(apiResponse, checkType) {
-  const data = apiResponse?.data || {};
-  const status = (data.status || "pending").toLowerCase();
-  const riskPercent = toRiskPercent(data.riskscore ?? data.risk_score ?? data.riskScore);
-  const counterparty = data.counterparty && typeof data.counterparty === "object" ? data.counterparty : {};
-  const counterpartyName =
-    typeof counterparty.name === "string" ? counterparty.name : "";
-  const isBlacklisted = !!(
+function deriveAmlProviderFlaggedFromData(data) {
+  if (!data || typeof data !== "object") return false;
+  const counterparty =
+    data.counterparty && typeof data.counterparty === "object" ? data.counterparty : {};
+  const counterpartyName = typeof counterparty.name === "string" ? counterparty.name : "";
+  return !!(
     data.blacklist ??
     data.is_blacklisted ??
     counterparty.is_blacklisted ??
     data.hasBlackListFlag ??
     /^banned by contract/i.test(counterpartyName)
   );
+}
+
+function deriveAmlProviderFlagged(row) {
+  if (row.isBlacklisted === 1) return true;
+
+  if (row.rawResponseJson) {
+    try {
+      const raw = JSON.parse(row.rawResponseJson);
+      if (deriveAmlProviderFlaggedFromData(raw?.data)) return true;
+    } catch {
+      // ignore invalid JSON
+    }
+  }
+
+  if (row.riskLevel === "severe" && row.riskPercent >= 100) return true;
+
+  let signals = [];
+  try {
+    signals = JSON.parse(row.signalsJson || "[]");
+  } catch {
+    signals = [];
+  }
+  if (
+    Array.isArray(signals) &&
+    signals.some((signal) => signal.key === "illegal_service" && signal.percent >= 100)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function normalizeAmlResponse(apiResponse, checkType) {
+  const data = apiResponse?.data || {};
+  const status = (data.status || "pending").toLowerCase();
+  const riskPercent = toRiskPercent(data.riskscore ?? data.risk_score ?? data.riskScore);
+  const isBlacklisted = deriveAmlProviderFlaggedFromData(data);
   const riskLevel = toRiskLevel(riskPercent, isBlacklisted, status);
 
   return {
@@ -165,7 +200,7 @@ export function formatCheckRow(row) {
     status: row.status,
     riskPercent: row.riskPercent,
     riskLevel: row.riskLevel,
-    isBlacklisted: row.isBlacklisted === 1,
+    isBlacklisted: deriveAmlProviderFlagged(row),
     signals,
     createdAt: row.createdAt,
     isPending: row.status === "pending" || row.status === "new",

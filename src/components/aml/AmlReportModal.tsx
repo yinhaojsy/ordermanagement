@@ -10,6 +10,7 @@ import {
   useRecheckAmlMutation,
 } from "../../services/api";
 import { formatFiatAmount, formatEntityType, parseAmlReport } from "../../utils/amlReportParser";
+import { isAmlProviderFlagged } from "../../utils/amlProviderFlag";
 import type { TronWallet } from "../../types/wallets";
 
 type Tone = "emerald" | "amber" | "rose" | "slate" | "blue";
@@ -408,7 +409,7 @@ function AmlReportContent({
         </div>
       ) : null}
 
-      {localCheck.isBlacklisted || parsed?.hasBlackListFlag ? (
+      {isAmlProviderFlagged(localCheck) || parsed?.hasBlackListFlag ? (
         <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900">
           {t("aml.providerBlacklistedWarning")}
         </div>
