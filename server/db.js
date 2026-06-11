@@ -679,6 +679,8 @@ const ensureSchema = () => {
       currentBalance REAL DEFAULT 0,
       lastBalanceCheck TEXT,
       amlAutoScreenTx INTEGER NOT NULL DEFAULT 1,
+      isUsdtBlacklisted INTEGER NOT NULL DEFAULT 0,
+      usdtBlacklistCheckedAt TEXT,
       createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updatedAt TEXT
     );`,
@@ -1652,6 +1654,22 @@ const migrateDatabase = () => {
         ).run();
       }
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('tron_wallets_aml_auto_screen_tx_v1')").run();
+    }
+
+    const tronWalletUsdtBlacklistMigration = db
+      .prepare("SELECT 1 FROM _schema_migrations WHERE key = ?")
+      .get("tron_wallets_usdt_blacklist_v1");
+    if (!tronWalletUsdtBlacklistMigration) {
+      const walletCols = db.prepare("PRAGMA table_info(tron_wallets)").all().map((c) => c.name);
+      if (!walletCols.includes("isUsdtBlacklisted")) {
+        db.prepare(
+          "ALTER TABLE tron_wallets ADD COLUMN isUsdtBlacklisted INTEGER NOT NULL DEFAULT 0",
+        ).run();
+      }
+      if (!walletCols.includes("usdtBlacklistCheckedAt")) {
+        db.prepare("ALTER TABLE tron_wallets ADD COLUMN usdtBlacklistCheckedAt TEXT").run();
+      }
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('tron_wallets_usdt_blacklist_v1')").run();
     }
   } catch (error) {
     console.error("Migration error:", error);

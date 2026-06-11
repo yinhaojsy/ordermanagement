@@ -9,7 +9,8 @@ import {
   useGetWalletAddressAmlReportsQuery,
   useRecheckAmlMutation,
 } from "../../services/api";
-import { formatFiatAmount, parseAmlReport } from "../../utils/amlReportParser";
+import { formatFiatAmount, formatEntityType, parseAmlReport } from "../../utils/amlReportParser";
+import type { TronWallet } from "../../types/wallets";
 
 type Tone = "emerald" | "amber" | "rose" | "slate" | "blue";
 type WalletTab = "screen" | "investigate";
@@ -55,6 +56,7 @@ type AmlReportModalProps = {
   check: AmlCheck | null;
   subtitle?: string;
   initialTab?: WalletTab;
+  wallet?: TronWallet | null;
   onCheckUpdated?: (check: AmlCheck) => void;
   onScreen?: () => void;
   onInvestigate?: () => void;
@@ -75,6 +77,7 @@ function WalletTabbedAmlReportModal({
   onClose,
   check,
   subtitle,
+  wallet,
   initialTab = "screen",
   onCheckUpdated,
   onScreen,
@@ -171,6 +174,7 @@ function WalletTabbedAmlReportModal({
             <AmlReportContent
               key={activeCheck.id}
               check={activeCheck}
+              wallet={wallet}
               onCheckUpdated={handleCheckUpdated}
             />
           ) : (
@@ -241,6 +245,7 @@ function TransactionAmlReportModal({
   onClose,
   check,
   subtitle,
+  wallet,
   onCheckUpdated,
 }: AmlReportModalProps & { check: AmlCheck }) {
   const { t } = useTranslation();
@@ -270,7 +275,7 @@ function TransactionAmlReportModal({
             </svg>
           </button>
         </div>
-        <AmlReportContent check={check} onCheckUpdated={onCheckUpdated} />
+        <AmlReportContent check={check} wallet={wallet} onCheckUpdated={onCheckUpdated} />
         <div className="mt-4 flex justify-end">
           <button
             type="button"
@@ -287,9 +292,11 @@ function TransactionAmlReportModal({
 
 function AmlReportContent({
   check,
+  wallet,
   onCheckUpdated,
 }: {
   check: AmlCheck;
+  wallet?: TronWallet | null;
   onCheckUpdated?: (check: AmlCheck) => void;
 }) {
   const { t } = useTranslation();
@@ -395,9 +402,29 @@ function AmlReportContent({
         </div>
       ) : null}
 
+      {wallet?.isUsdtBlacklisted ? (
+        <div className="mb-4 rounded-lg border border-rose-300 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-800">
+          {t("wallets.usdtBlacklistedDetail")}
+        </div>
+      ) : null}
+
       {localCheck.isBlacklisted || parsed?.hasBlackListFlag ? (
-        <div className="mb-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">
-          {t("aml.blacklistedWarning")}
+        <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900">
+          {t("aml.providerBlacklistedWarning")}
+        </div>
+      ) : null}
+
+      {parsed?.counterpartyName ? (
+        <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm">
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            {t("aml.identifiedEntity")}
+          </div>
+          <div className="mt-1 font-semibold text-slate-900">{parsed.counterpartyName}</div>
+          {parsed.counterpartyType ? (
+            <div className="mt-1 text-xs text-slate-600">
+              {formatEntityType(parsed.counterpartyType)}
+            </div>
+          ) : null}
         </div>
       ) : null}
 

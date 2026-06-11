@@ -229,6 +229,8 @@ export interface ParsedAmlReport {
   riskyFiatAmount: string | null;
   riskyPercent: number | null;
   counterpartyAddress: string | null;
+  counterpartyName: string | null;
+  counterpartyType: string | null;
   pdfReport: string | null;
   timestamp: string | null;
   confirmedAt: string | null;
@@ -309,6 +311,8 @@ export function parseAmlReport(
     riskyPercent,
     counterpartyAddress:
       counterparty.address != null ? String(counterparty.address) : null,
+    counterpartyName: counterparty.name != null ? String(counterparty.name) : null,
+    counterpartyType: counterparty.type != null ? String(counterparty.type) : null,
     pdfReport: data.pdfReport != null ? String(data.pdfReport) : null,
     timestamp: data.timestamp != null ? String(data.timestamp) : null,
     confirmedAt: formatUnixTimestamp(data.confirmed_at) ?? null,

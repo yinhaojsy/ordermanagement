@@ -1,4 +1,5 @@
 import { db } from "../db.js";
+import { mapWalletRow } from "../utils/mapWalletRow.js";
 import {
   checkWalletAddress,
   investigateWalletAddress,
@@ -129,7 +130,7 @@ export const patchWalletAmlAutoScreenTx = (req, res, next) => {
     db.prepare(
       "UPDATE tron_wallets SET amlAutoScreenTx = ?, updatedAt = ? WHERE id = ?",
     ).run(enabled ? 1 : 0, new Date().toISOString(), walletId);
-    const wallet = db.prepare("SELECT * FROM tron_wallets WHERE id = ?").get(walletId);
+    const wallet = mapWalletRow(db.prepare("SELECT * FROM tron_wallets WHERE id = ?").get(walletId));
     res.json({ wallet });
   } catch (error) {
     next(error);

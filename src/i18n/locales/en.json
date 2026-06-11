@@ -1351,7 +1351,17 @@
     "wallets": "wallets",
     "lastChecked": "Last checked",
     "copyAddress": "Copy address",
-    "addressCopied": "Address copied to clipboard"
+    "addressCopied": "Address copied to clipboard",
+    "blacklistStatus": "Blacklist status",
+    "usdtBlacklisted": "USDT frozen",
+    "usdtBlacklistClear": "USDT clear",
+    "usdtBlacklistUnknown": "USDT unchecked",
+    "usdtBlacklistHint": "On-chain Tether USDT TRC20 contract blacklist (isBlackListed)",
+    "usdtBlacklistedDetail": "This address is frozen on the Tether USDT TRC20 contract. USDT transfers to or from this wallet are blocked on-chain.",
+    "amlProviderFlagged": "AML flagged",
+    "amlProviderClear": "AML clear",
+    "amlProviderPending": "AML pending",
+    "amlProviderFlagHint": "Blacklist or high-risk flag from your AML provider (e.g. AMLBot)"
   },
   "integrations": {
     "title": "Integrations",
@@ -1390,6 +1400,8 @@
     "asset": "Asset",
     "screenedAt": "Screened at",
     "blacklistedWarning": "This address is on a blacklist. Review before proceeding.",
+    "providerBlacklistedWarning": "Your AML provider flagged this address (blacklist connection, contract-ban entity, or provider blacklist signal). This is separate from the on-chain USDT contract check.",
+    "identifiedEntity": "Identified entity",
     "pendingMessage": "Analysis in progress. This page will refresh automatically.",
     "signalsTitle": "Risk signals",
     "signalsTab": {

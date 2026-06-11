@@ -52,7 +52,16 @@ function normalizeAmlResponse(apiResponse, checkType) {
   const data = apiResponse?.data || {};
   const status = (data.status || "pending").toLowerCase();
   const riskPercent = toRiskPercent(data.riskscore ?? data.risk_score ?? data.riskScore);
-  const isBlacklisted = !!(data.blacklist ?? data.is_blacklisted ?? data.counterparty?.is_blacklisted);
+  const counterparty = data.counterparty && typeof data.counterparty === "object" ? data.counterparty : {};
+  const counterpartyName =
+    typeof counterparty.name === "string" ? counterparty.name : "";
+  const isBlacklisted = !!(
+    data.blacklist ??
+    data.is_blacklisted ??
+    counterparty.is_blacklisted ??
+    data.hasBlackListFlag ??
+    /^banned by contract/i.test(counterpartyName)
+  );
   const riskLevel = toRiskLevel(riskPercent, isBlacklisted, status);
 
   return {

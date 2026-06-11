@@ -15,7 +15,7 @@ function riskTone(check: AmlCheck | null | undefined): Tone {
 function riskLabel(check: AmlCheck | null | undefined, notScreened: string, screening: string): string {
   if (!check) return notScreened;
   if (check.isPending || check.status === "pending") return screening;
-  if (check.isBlacklisted) return "Blacklisted";
+  if (check.isBlacklisted) return "AML flagged";
   if (check.riskPercent != null) {
     const level = check.riskLevel !== "pending" ? ` ${check.riskLevel}` : "";
     return `${check.riskPercent}%${level}`;

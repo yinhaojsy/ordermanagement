@@ -30,6 +30,8 @@ import { useAppSelector } from "../app/hooks";
 import { hasActionPermission } from "../utils/permissions";
 import AmlRiskBadge from "../components/aml/AmlRiskBadge";
 import AmlReportModal from "../components/aml/AmlReportModal";
+import WalletBlacklistBadges from "../components/wallets/WalletBlacklistBadges";
+import type { TronWallet } from "../types/wallets";
 import type { AmlCheck } from "../types/integrations";
 
 function asAmlCheckList(value: unknown): AmlCheck[] {
@@ -59,7 +61,8 @@ const truncateAddress = (address: string) => {
   return `${address.substring(0, 6)}...${address.substring(address.length - 4)}`;
 };
 
-function isWalletAutoScreenTxEnabled(wallet: { amlAutoScreenTx?: number }) {
+function isWalletAutoScreenTxEnabled(wallet: Pick<TronWallet, "amlAutoScreenTx">) {
+  if (typeof wallet.amlAutoScreenTx === "boolean") return wallet.amlAutoScreenTx;
   return wallet.amlAutoScreenTx !== 0;
 }
 
@@ -160,6 +163,7 @@ export default function WalletTrackerPage() {
   const [updateWalletAmlAutoScreenTx] = useUpdateWalletAmlAutoScreenTxMutation();
 
   const [amlReportCheck, setAmlReportCheck] = useState<AmlCheck | null>(null);
+  const [amlReportWallet, setAmlReportWallet] = useState<TronWallet | null>(null);
   const [amlReportSubtitle, setAmlReportSubtitle] = useState("");
   const [amlReportInitialTab, setAmlReportInitialTab] = useState<"screen" | "investigate">("screen");
   const [showAmlHistory, setShowAmlHistory] = useState(false);
@@ -389,10 +393,12 @@ export default function WalletTrackerPage() {
     check: AmlCheck,
     subtitle: string,
     tab: "screen" | "investigate" = "screen",
+    wallet?: TronWallet | null,
   ) => {
     setAmlReportInitialTab(amlReportTabForCheck(check, tab));
     setAmlReportCheck(check);
     setAmlReportSubtitle(subtitle);
+    setAmlReportWallet(wallet ?? wallets.find((w) => w.id === check.walletId) ?? null);
   };
 
   const runAmlAction = async (
@@ -584,6 +590,7 @@ export default function WalletTrackerPage() {
                   <th className="py-3 px-2">{t("wallets.currentBalance") || "Current USDT Balance"}</th>
                   <th className="py-3 px-2">{t("wallets.walletAddress") || "Wallet Address"}</th>
                   <th className="py-3 px-2">{t("wallets.remarks") || "Remarks"}</th>
+                  <th className="py-3 px-2">{t("wallets.blacklistStatus")}</th>
                   {amlStatus?.enabled ? (
                     <th className="py-3 px-2">{t("aml.risk")}</th>
                   ) : null}
@@ -638,6 +645,13 @@ export default function WalletTrackerPage() {
                     <td className="py-3 px-2 text-slate-600 max-w-xs truncate">
                       {wallet.remarks || "-"}
                     </td>
+                    <td className="py-3 px-2">
+                      <WalletBlacklistBadges
+                        wallet={wallet}
+                        amlCheck={amlStatus?.enabled ? amlSummariesData?.summaries?.[wallet.id] : null}
+                        compact
+                      />
+                    </td>
                     {amlStatus?.enabled ? (
                       <td className="py-3 px-2">
                         <button
@@ -645,7 +659,7 @@ export default function WalletTrackerPage() {
                           className="inline-flex"
                           onClick={() => {
                             const check = amlSummariesData?.summaries?.[wallet.id];
-                            if (check) openAmlReport(check, wallet.walletAddress, "screen");
+                            if (check) openAmlReport(check, wallet.walletAddress, "screen", wallet);
                           }}
                         >
                           <AmlRiskBadge
@@ -1095,8 +1109,12 @@ export default function WalletTrackerPage() {
 
       <AmlReportModal
         isOpen={!!amlReportCheck}
-        onClose={() => setAmlReportCheck(null)}
+        onClose={() => {
+          setAmlReportCheck(null);
+          setAmlReportWallet(null);
+        }}
         check={amlReportCheck}
+        wallet={amlReportWallet}
         subtitle={amlReportSubtitle}
         initialTab={amlReportInitialTab}
         onCheckUpdated={handleAmlCheckUpdated}

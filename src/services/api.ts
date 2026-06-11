@@ -2220,7 +2220,7 @@ export const api = createApi({
     }),
 
     // Wallet endpoints
-    getWallets: builder.query<any[], void>({
+    getWallets: builder.query<import("../types/wallets").TronWallet[], void>({
       query: () => "wallets",
       providesTags: (result) =>
         result

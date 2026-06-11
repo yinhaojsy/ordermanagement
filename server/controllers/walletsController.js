@@ -4,6 +4,8 @@ import {
   autoScreenNewWallet,
   autoScreenNewTransaction,
 } from "../services/integrations/amlService.js";
+import { checkUsdtContractBlacklist } from "../services/tron/tronService.js";
+import { mapWalletRow } from "../utils/mapWalletRow.js";
 
 // TronScan API configuration
 // If API key is provided, use authenticated TronScan as primary (100K requests/day)
@@ -28,6 +30,22 @@ const getTronScanEndpoints = () => {
 };
 
 const USDT_CONTRACT_ADDRESS = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"; // USDT TRC20 contract
+
+async function refreshUsdtBlacklistStatus(walletId, walletAddress) {
+  const checkedAt = new Date().toISOString();
+  try {
+    const isBlacklisted = await checkUsdtContractBlacklist(walletAddress);
+    db.prepare(
+      `UPDATE tron_wallets
+       SET isUsdtBlacklisted = ?, usdtBlacklistCheckedAt = ?, updatedAt = ?
+       WHERE id = ?`,
+    ).run(isBlacklisted ? 1 : 0, checkedAt, checkedAt, walletId);
+    return isBlacklisted;
+  } catch (error) {
+    console.error(`USDT blacklist check failed for wallet ${walletId}:`, error.message);
+    return null;
+  }
+}
 
 // Keep track of which endpoint is working
 let workingEndpointIndex = 0;
@@ -203,7 +221,7 @@ export const listWallets = (_req, res, next) => {
          ORDER BY createdAt DESC;`
       )
       .all();
-    res.json(wallets);
+    res.json(wallets.map(mapWalletRow));
   } catch (error) {
     next(error);
   }
@@ -256,20 +274,46 @@ export const createWallet = async (req, res, next) => {
       return res.status(400).json({ message: "This wallet address is already being tracked" });
     }
 
-    // Fetch initial balance
+    // Fetch initial balance and on-chain USDT blacklist status
     let currentBalance = 0;
     let lastBalanceCheck = null;
+    let isUsdtBlacklisted = 0;
+    let usdtBlacklistCheckedAt = null;
     try {
-      currentBalance = await fetchWalletBalance(walletAddress);
+      const [balance, usdtBlacklisted] = await Promise.all([
+        fetchWalletBalance(walletAddress),
+        checkUsdtContractBlacklist(walletAddress),
+      ]);
+      currentBalance = balance;
       lastBalanceCheck = new Date().toISOString();
+      isUsdtBlacklisted = usdtBlacklisted ? 1 : 0;
+      usdtBlacklistCheckedAt = lastBalanceCheck;
     } catch (error) {
-      console.error("Failed to fetch initial balance:", error);
-      // Continue without balance - will be fetched later
+      console.error("Failed to fetch initial wallet status:", error);
+      try {
+        currentBalance = await fetchWalletBalance(walletAddress);
+        lastBalanceCheck = new Date().toISOString();
+      } catch (balanceError) {
+        console.error("Failed to fetch initial balance:", balanceError);
+      }
+      try {
+        const usdtBlacklisted = await checkUsdtContractBlacklist(walletAddress);
+        isUsdtBlacklisted = usdtBlacklisted ? 1 : 0;
+        usdtBlacklistCheckedAt = new Date().toISOString();
+      } catch (blacklistError) {
+        console.error("Failed to fetch initial USDT blacklist status:", blacklistError);
+      }
     }
 
     const stmt = db.prepare(
-      `INSERT INTO tron_wallets (nickname, walletAddress, remarks, currentBalance, lastBalanceCheck, createdAt)
-       VALUES (@nickname, @walletAddress, @remarks, @currentBalance, @lastBalanceCheck, @createdAt);`
+      `INSERT INTO tron_wallets (
+         nickname, walletAddress, remarks, currentBalance, lastBalanceCheck,
+         isUsdtBlacklisted, usdtBlacklistCheckedAt, createdAt
+       )
+       VALUES (
+         @nickname, @walletAddress, @remarks, @currentBalance, @lastBalanceCheck,
+         @isUsdtBlacklisted, @usdtBlacklistCheckedAt, @createdAt
+       );`
     );
 
     const result = stmt.run({
@@ -278,12 +322,14 @@ export const createWallet = async (req, res, next) => {
       remarks: remarks || null,
       currentBalance,
       lastBalanceCheck,
+      isUsdtBlacklisted,
+      usdtBlacklistCheckedAt,
       createdAt: new Date().toISOString(),
     });
 
-    const wallet = db
-      .prepare("SELECT * FROM tron_wallets WHERE id = ?")
-      .get(result.lastInsertRowid);
+    const wallet = mapWalletRow(
+      db.prepare("SELECT * FROM tron_wallets WHERE id = ?").get(result.lastInsertRowid),
+    );
 
     // Fetch and store recent transactions
     try {
@@ -349,7 +395,7 @@ export const updateWallet = async (req, res, next) => {
       updatedAt: new Date().toISOString(),
     });
 
-    const wallet = db.prepare("SELECT * FROM tron_wallets WHERE id = ?").get(id);
+    const wallet = mapWalletRow(db.prepare("SELECT * FROM tron_wallets WHERE id = ?").get(id));
     res.json(wallet);
   } catch (error) {
     next(error);
@@ -389,8 +435,10 @@ export const refreshWalletBalance = async (req, res, next) => {
       return res.status(404).json({ message: "Wallet not found" });
     }
 
-    const newBalance = await fetchWalletBalance(wallet.walletAddress);
-    const oldBalance = wallet.currentBalance;
+    const [newBalance] = await Promise.all([
+      fetchWalletBalance(wallet.walletAddress),
+      refreshUsdtBlacklistStatus(id, wallet.walletAddress),
+    ]);
 
     db.prepare(
       `UPDATE tron_wallets 
@@ -403,7 +451,7 @@ export const refreshWalletBalance = async (req, res, next) => {
       updatedAt: new Date().toISOString(),
     });
 
-    const updated = db.prepare("SELECT * FROM tron_wallets WHERE id = ?").get(id);
+    const updated = mapWalletRow(db.prepare("SELECT * FROM tron_wallets WHERE id = ?").get(id));
 
     res.json(updated);
   } catch (error) {
@@ -497,7 +545,10 @@ export const refreshAllWallets = async (req, res, next) => {
 
     for (const wallet of wallets) {
       try {
-        const newBalance = await fetchWalletBalance(wallet.walletAddress);
+        const [newBalance] = await Promise.all([
+          fetchWalletBalance(wallet.walletAddress),
+          refreshUsdtBlacklistStatus(wallet.id, wallet.walletAddress),
+        ]);
         const oldBalance = wallet.currentBalance;
 
         db.prepare(

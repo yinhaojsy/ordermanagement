@@ -1291,6 +1291,18 @@
     "deleteError": "删除标签失败",
     "confirmDelete": "您确定要删除标签 \"{{tagName}}\" 吗？"
   },
+  "wallets": {
+    "blacklistStatus": "黑名单状态",
+    "usdtBlacklisted": "USDT 已冻结",
+    "usdtBlacklistClear": "USDT 正常",
+    "usdtBlacklistUnknown": "USDT 未检测",
+    "usdtBlacklistHint": "链上 Tether USDT TRC20 合约黑名单（isBlackListed）",
+    "usdtBlacklistedDetail": "该地址已被 Tether USDT TRC20 合约冻结，链上无法收发 USDT。",
+    "amlProviderFlagged": "AML 已标记",
+    "amlProviderClear": "AML 正常",
+    "amlProviderPending": "AML 待完成",
+    "amlProviderFlagHint": "AML 服务商（如 AMLBot）的黑名单或高风险标记"
+  },
   "integrations": {
     "title": "集成",
     "description": "配置应用使用的第三方 API 服务商。",
@@ -1321,6 +1333,8 @@
     "checkType": "检查类型",
     "reportTitle": "AML 筛查报告",
     "blacklistedWarning": "该地址在黑名单中，请谨慎处理。",
+    "providerBlacklistedWarning": "AML 服务商已标记此地址（黑名单关联、合约封禁实体或服务商黑名单信号）。这与链上 USDT 合约检测相互独立。",
+    "identifiedEntity": "识别实体",
     "pendingMessage": "分析进行中，页面将自动刷新。",
     "signalsTitle": "风险信号",
     "noSignals": "无风险信号。",
