@@ -6,7 +6,7 @@ import ReferenceRatesTable from "../components/referenceRates/ReferenceRatesTabl
 import ReferenceRatesPairEditor, {
   type PairFormState,
 } from "../components/referenceRates/ReferenceRatesPairEditor";
-import { CONFIG_PAIR_ORDER, DERIVED_PAIR_ORDER, REFERENCE_RATE_PAIR_LABELS } from "../constants/referenceRatePairs";
+import { CONFIG_PAIR_ORDER, DERIVED_PAIR_ORDER } from "../constants/referenceRatePairs";
 import {
   useGetReferenceRatesQuery,
   useSendReferenceRatesToTelegramMutation,
@@ -16,15 +16,14 @@ import { hasActionPermission } from "../utils/permissions";
 import { useAppSelector } from "../app/hooks";
 import type { ReferenceRateBaseMode, ReferenceRatePairId, ReferenceRatesUpdatePayload } from "../types";
 import {
+  buildDerivedAutoBases,
   buildPreviewFromForm,
   clampDisplayDecimals,
   displayToPercentFraction,
   fractionToDisplayPercent,
-  responseDerivedDecimals,
-  responseToFormPairs,
+  responseDerivedFormPairs,
+  type DerivedPairId,
 } from "../utils/referenceRates";
-import { preventNumberInputWheel } from "../utils/formInputs";
-
 const emptyFormPair = (pairId: ReferenceRatePairId): PairFormState => {
   const base: PairFormState = {
     baseModeChoice: "average",
@@ -54,6 +53,9 @@ const emptyFormPair = (pairId: ReferenceRatePairId): PairFormState => {
       markdownPercent: "1.5",
     };
   }
+  if (DERIVED_PAIR_ORDER.includes(pairId)) {
+    return { ...base, baseModeChoice: "average" };
+  }
   return base;
 };
 
@@ -67,6 +69,16 @@ const formToPayloadPair = (
 
   if (pairId === "PKR_USDT") {
     return { markup, markdown, displayDecimals };
+  }
+
+  if (DERIVED_PAIR_ORDER.includes(pairId)) {
+    const avg = f.averageBase.trim() === "" ? null : Number(f.averageBase);
+    return {
+      averageBase: Number.isFinite(avg as number) ? avg : null,
+      markup,
+      markdown,
+      displayDecimals,
+    };
   }
 
   if (pairId === "AED_USDT" || pairId === "HKD_USDT") {
@@ -135,6 +147,15 @@ const responsePairToForm = (
       displayDecimals: String(p.displayDecimals ?? 3),
     };
   }
+  if (DERIVED_PAIR_ORDER.includes(pairId)) {
+    return {
+      ...emptyFormPair(pairId),
+      averageBase: p.averageBase != null ? String(p.averageBase) : "",
+      markupPercent: fractionToDisplayPercent(p.markup),
+      markdownPercent: fractionToDisplayPercent(p.markdown),
+      displayDecimals: String(p.displayDecimals ?? 3),
+    };
+  }
   return base;
 };
 
@@ -151,16 +172,9 @@ export default function ReferenceRatesPage() {
   const [sendToTelegram, { isLoading: isSendingTelegram }] = useSendReferenceRatesToTelegramMutation();
 
   const [pkrSwiftFactor, setPkrSwiftFactor] = useState("1.01");
-  const [derivedDecimals, setDerivedDecimals] = useState<
-    Record<"HKD_PKR" | "CNY_PKR" | "PKR_SWIFT", string>
-  >({
-    HKD_PKR: "3",
-    CNY_PKR: "3",
-    PKR_SWIFT: "3",
-  });
   const [form, setForm] = useState<Record<ReferenceRatePairId, PairFormState>>(() => {
     const init = {} as Record<ReferenceRatePairId, PairFormState>;
-    CONFIG_PAIR_ORDER.forEach((id) => {
+    [...CONFIG_PAIR_ORDER, ...DERIVED_PAIR_ORDER].forEach((id) => {
       init[id] = emptyFormPair(id);
     });
     return init;
@@ -174,7 +188,6 @@ export default function ReferenceRatesPage() {
 
   useEffect(() => {
     if (!data) return;
-    const pairs = responseToFormPairs(data);
     const next = {} as Record<ReferenceRatePairId, PairFormState>;
     CONFIG_PAIR_ORDER.forEach((id) => {
       const p = data.pairs[id];
@@ -188,23 +201,31 @@ export default function ReferenceRatesPage() {
         displayDecimals: p?.displayDecimals,
       });
     });
+    const derivedPairs = responseDerivedFormPairs(data);
+    DERIVED_PAIR_ORDER.forEach((id) => {
+      const derivedId = id as DerivedPairId;
+      const p = derivedPairs[derivedId] ?? data.pairs[derivedId];
+      next[id] = responsePairToForm(id, {
+        baseMode: "derived",
+        averageBase: p?.averageBase ?? null,
+        baseBuy: null,
+        baseSell: null,
+        markup: p?.markup ?? 0,
+        markdown: p?.markdown ?? 0,
+        displayDecimals: p?.displayDecimals,
+      });
+    });
     setForm(next);
-    setDerivedDecimals(responseDerivedDecimals(data));
     setPkrSwiftFactor(String(data.pkrSwiftFactor ?? 1.01));
   }, [data]);
 
   const payloadPairs = useMemo(() => {
     const pairs: ReferenceRatesUpdatePayload["pairs"] = {};
-    CONFIG_PAIR_ORDER.forEach((id) => {
+    [...CONFIG_PAIR_ORDER, ...DERIVED_PAIR_ORDER].forEach((id) => {
       pairs[id] = formToPayloadPair(id, form[id]);
     });
-    DERIVED_PAIR_ORDER.forEach((id) => {
-      pairs[id] = {
-        displayDecimals: clampDisplayDecimals(derivedDecimals[id]),
-      };
-    });
     return pairs;
-  }, [form, derivedDecimals]);
+  }, [form]);
 
   const swiftFactorNum = Number(pkrSwiftFactor);
   const previewPairs = useMemo(
@@ -220,6 +241,15 @@ export default function ReferenceRatesPage() {
       pairs: previewPairs,
     }),
     [data, previewPairs, swiftFactorNum],
+  );
+
+  const derivedAutoBases = useMemo(
+    () =>
+      buildDerivedAutoBases(
+        payloadPairs,
+        Number.isFinite(swiftFactorNum) ? swiftFactorNum : 1.01,
+      ),
+    [payloadPairs, swiftFactorNum],
   );
 
   const setPairField = (id: ReferenceRatePairId, patch: Partial<PairFormState>) => {
@@ -328,49 +358,23 @@ export default function ReferenceRatesPage() {
 
         <div>
           <h2 className="mb-3 text-lg font-semibold">{t("referenceRates.sectionDerived")}</h2>
-          <div className="grid gap-4 sm:grid-cols-2">
+          <p className="mb-4 text-sm text-slate-600">{t("referenceRates.sectionDerivedDesc")}</p>
+          <div className="space-y-6">
             {DERIVED_PAIR_ORDER.map((id) => (
-              <SectionCard key={id} title={REFERENCE_RATE_PAIR_LABELS[id]}>
-                <div className="max-w-[8rem]">
-                  <label className="mb-1 block text-sm font-medium">{t("referenceRates.panelDecimals")}</label>
-                  <input
-                    type="number"
-                    min={0}
-                    max={8}
-                    step={1}
-                    disabled={!canEdit}
-                    className="w-full rounded-lg border px-3 py-2 text-sm"
-                    value={derivedDecimals[id]}
-                    onChange={(e) =>
-                      setDerivedDecimals((prev) => ({ ...prev, [id]: e.target.value }))
-                    }
-                    onWheel={preventNumberInputWheel}
-                  />
-                </div>
-              </SectionCard>
+              <ReferenceRatesPairEditor
+                key={id}
+                pairId={id}
+                form={form[id]}
+                preview={previewPairs[id]}
+                derivedAutoBase={derivedAutoBases[id as DerivedPairId]}
+                pkrSwiftFactor={id === "PKR_SWIFT" ? pkrSwiftFactor : undefined}
+                onPkrSwiftFactorChange={id === "PKR_SWIFT" ? setPkrSwiftFactor : undefined}
+                canEdit={canEdit}
+                onChange={(patch) => setPairField(id, patch)}
+              />
             ))}
           </div>
         </div>
-
-        <SectionCard title={t("referenceRates.pkrSwiftTitle")}>
-          <div className="max-w-xs">
-            <label className="mb-1 block text-sm font-medium">{t("referenceRates.pkrSwiftFactor")}</label>
-            <input
-              type="number"
-              step="any"
-              min="0"
-              disabled={!canEdit}
-              className="w-full rounded-lg border px-3 py-2 text-sm"
-              value={pkrSwiftFactor}
-              onChange={(e) => setPkrSwiftFactor(e.target.value)}
-              onWheel={preventNumberInputWheel}
-            />
-            <p className="mt-2 text-sm text-slate-600">
-              {t("referenceRates.pkrSwiftPreview")}:{" "}
-              <span className="font-mono">{previewPairs.PKR_SWIFT.computedSell?.toFixed(6) ?? "—"}</span>
-            </p>
-          </div>
-        </SectionCard>
 
         {canEdit ? (
           <div className="flex flex-wrap items-center gap-3">

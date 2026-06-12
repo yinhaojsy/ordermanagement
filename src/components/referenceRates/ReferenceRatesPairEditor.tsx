@@ -19,12 +19,18 @@ export default function ReferenceRatesPairEditor({
   form,
   preview,
   canEdit,
+  derivedAutoBase,
+  pkrSwiftFactor,
+  onPkrSwiftFactorChange,
   onChange,
 }: {
   pairId: ReferenceRatePairId;
   form: PairFormState;
   preview: ReferenceRatePair;
   canEdit: boolean;
+  derivedAutoBase?: number | null;
+  pkrSwiftFactor?: string;
+  onPkrSwiftFactorChange?: (value: string) => void;
   onChange: (patch: Partial<PairFormState>) => void;
 }) {
   const { t } = useTranslation();
@@ -32,7 +38,9 @@ export default function ReferenceRatesPairEditor({
   const isAverage = form.baseModeChoice === "average";
   const showModeToggle = kind === "standalone";
   const showBases = kind === "standalone" || kind === "benchmark";
-  const showSpreads = kind === "standalone" || kind === "chain";
+  const showDerivedRate = kind === "derived";
+  const showSpreads = kind === "standalone" || kind === "chain" || kind === "derived";
+  const showMarkdown = kind !== "derived" || pairId !== "PKR_SWIFT";
 
   return (
     <SectionCard title={REFERENCE_RATE_PAIR_LABELS[pairId]}>
@@ -63,6 +71,30 @@ export default function ReferenceRatesPairEditor({
         )}
 
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5">
+          {showDerivedRate && (
+            <div>
+              <label className="mb-1 block text-sm font-medium">{t("referenceRates.derivedRate")}</label>
+              <input
+                type="number"
+                step="any"
+                disabled={!canEdit}
+                placeholder={
+                  derivedAutoBase != null ? String(Number(derivedAutoBase.toFixed(6))) : undefined
+                }
+                className="w-full rounded-lg border px-3 py-2 text-sm"
+                value={form.averageBase}
+                onChange={(e) => onChange({ averageBase: e.target.value })}
+                onWheel={preventNumberInputWheel}
+              />
+              {!form.averageBase.trim() && derivedAutoBase != null ? (
+                <p className="mt-1 text-xs text-slate-500">
+                  {t("referenceRates.derivedRateAuto", {
+                    rate: Number(derivedAutoBase.toFixed(6)),
+                  })}
+                </p>
+              ) : null}
+            </div>
+          )}
           {showBases && kind === "standalone" && isAverage && (
             <div>
               <label className="mb-1 block text-sm font-medium">{t("referenceRates.averageBase")}</label>
@@ -148,21 +180,39 @@ export default function ReferenceRatesPairEditor({
                   onWheel={preventNumberInputWheel}
                 />
               </div>
-              <div>
-                <label className="mb-1 block text-sm font-medium">{t("referenceRates.markdownPercent")}</label>
-                <input
-                  type="number"
-                  step="any"
-                  min="0"
-                  disabled={!canEdit}
-                  className="w-full rounded-lg border px-3 py-2 text-sm"
-                  value={form.markdownPercent}
-                  onChange={(e) => onChange({ markdownPercent: e.target.value })}
-                  onWheel={preventNumberInputWheel}
-                />
-              </div>
+              {showMarkdown ? (
+                <div>
+                  <label className="mb-1 block text-sm font-medium">{t("referenceRates.markdownPercent")}</label>
+                  <input
+                    type="number"
+                    step="any"
+                    min="0"
+                    disabled={!canEdit}
+                    className="w-full rounded-lg border px-3 py-2 text-sm"
+                    value={form.markdownPercent}
+                    onChange={(e) => onChange({ markdownPercent: e.target.value })}
+                    onWheel={preventNumberInputWheel}
+                  />
+                </div>
+              ) : null}
             </>
           )}
+          {pairId === "PKR_SWIFT" && pkrSwiftFactor != null && onPkrSwiftFactorChange ? (
+            <div>
+              <label className="mb-1 block text-sm font-medium">{t("referenceRates.pkrSwiftFactor")}</label>
+              <input
+                type="number"
+                step="any"
+                min="0"
+                disabled={!canEdit}
+                className="w-full rounded-lg border px-3 py-2 text-sm"
+                value={pkrSwiftFactor}
+                onChange={(e) => onPkrSwiftFactorChange(e.target.value)}
+                onWheel={preventNumberInputWheel}
+              />
+              <p className="mt-1 text-xs text-slate-500">{t("referenceRates.pkrSwiftFactorHint")}</p>
+            </div>
+          ) : null}
           <div>
             <label className="mb-1 block text-sm font-medium">{t("referenceRates.panelDecimals")}</label>
             <input

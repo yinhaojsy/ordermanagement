@@ -189,6 +189,62 @@ export const normalizePairInput = (pairId, raw = {}) => {
   );
 };
 
+/**
+ * @param {string} pairId
+ * @param {object} raw
+ */
+export const normalizeDerivedPairInput = (pairId, raw = {}) => {
+  const markup = toNum(raw.markup) ?? 0;
+  const markdown = toNum(raw.markdown) ?? 0;
+  const averageBase = toNum(raw.averageBase);
+  return withDisplayDecimals(
+    {
+      id: pairId,
+      label: PAIR_LABELS[pairId] || pairId,
+      kind: "derived",
+      baseMode: "derived",
+      averageBase: hasPositive(averageBase) ? averageBase : null,
+      baseBuy: null,
+      baseSell: null,
+      markup: Math.max(0, markup),
+      markdown: Math.max(0, markdown),
+    },
+    raw,
+  );
+};
+
+/**
+ * @param {string} pairId
+ * @param {{ buy: number|null, sell: number|null, error: string|null }} raw
+ * @param {ReturnType<typeof normalizeDerivedPairInput>} config
+ */
+const applyDerivedSpreads = (pairId, raw, config) => {
+  const markup = config.markup ?? 0;
+  const markdown = config.markdown ?? 0;
+  const storedBase = config.averageBase;
+  const autoBase =
+    pairId === "PKR_SWIFT"
+      ? raw.sell
+      : hasPositive(raw.buy) && hasPositive(raw.sell)
+        ? (raw.buy + raw.sell) / 2
+        : raw.sell ?? raw.buy;
+  const base = hasPositive(storedBase) ? storedBase : autoBase;
+
+  if (!hasPositive(base)) {
+    return { buy: null, sell: null, error: raw.error };
+  }
+
+  if (pairId === "PKR_SWIFT") {
+    return { buy: null, sell: base * (1 + markup), error: raw.error };
+  }
+
+  return {
+    buy: base * (1 - markdown),
+    sell: base * (1 + markup),
+    error: raw.error,
+  };
+};
+
 const attachComputed = (pair, computed) => ({
   ...pair,
   computedBuy: computed.buy,
@@ -260,7 +316,9 @@ export const buildReferenceRatesResponse = (config) => {
     { buy: hkd.baseBuy, sell: hkd.baseSell, error: null },
   );
 
-  const decimalsFor = (id) => clampDisplayDecimals(config.pairs?.[id]?.displayDecimals);
+  const hkdPkrConfig = normalizeDerivedPairInput("HKD_PKR", config.pairs?.HKD_PKR || {});
+  const cnyPkrConfig = normalizeDerivedPairInput("CNY_PKR", config.pairs?.CNY_PKR || {});
+  const pkrSwiftConfig = normalizeDerivedPairInput("PKR_SWIFT", config.pairs?.PKR_SWIFT || {});
 
   // G column: HKD/PKR — buy = E8/F7, sell = E9/F6
   let hkdPkrBuy = null;
@@ -278,19 +336,12 @@ export const buildReferenceRatesResponse = (config) => {
   }
 
   pairs.HKD_PKR = attachComputed(
-    {
-      id: "HKD_PKR",
-      label: PAIR_LABELS.HKD_PKR,
-      kind: "derived",
-      baseMode: "derived",
-      averageBase: null,
-      baseBuy: null,
-      baseSell: null,
-      markup: 0,
-      markdown: 0,
-      displayDecimals: decimalsFor("HKD_PKR"),
-    },
-    { buy: hkdPkrBuy, sell: hkdPkrSell, error: hkdPkrError },
+    hkdPkrConfig,
+    applyDerivedSpreads(
+      "HKD_PKR",
+      { buy: hkdPkrBuy, sell: hkdPkrSell, error: hkdPkrError },
+      hkdPkrConfig,
+    ),
   );
 
   // H column: CNY/PKR — buy = E8/B7, sell = E9/B7
@@ -308,19 +359,12 @@ export const buildReferenceRatesResponse = (config) => {
   }
 
   pairs.CNY_PKR = attachComputed(
-    {
-      id: "CNY_PKR",
-      label: PAIR_LABELS.CNY_PKR,
-      kind: "derived",
-      baseMode: "derived",
-      averageBase: null,
-      baseBuy: null,
-      baseSell: null,
-      markup: 0,
-      markdown: 0,
-      displayDecimals: decimalsFor("CNY_PKR"),
-    },
-    { buy: cnyPkrBuy, sell: cnyPkrSell, error: cnyPkrError },
+    cnyPkrConfig,
+    applyDerivedSpreads(
+      "CNY_PKR",
+      { buy: cnyPkrBuy, sell: cnyPkrSell, error: cnyPkrError },
+      cnyPkrConfig,
+    ),
   );
 
   let pkrSwiftSell = null;
@@ -332,19 +376,12 @@ export const buildReferenceRatesResponse = (config) => {
   }
 
   pairs.PKR_SWIFT = attachComputed(
-    {
-      id: "PKR_SWIFT",
-      label: PAIR_LABELS.PKR_SWIFT,
-      kind: "derived",
-      baseMode: "derived",
-      averageBase: null,
-      baseBuy: null,
-      baseSell: null,
-      markup: 0,
-      markdown: 0,
-      displayDecimals: decimalsFor("PKR_SWIFT"),
-    },
-    { buy: null, sell: pkrSwiftSell, error: pkrSwiftError },
+    pkrSwiftConfig,
+    applyDerivedSpreads(
+      "PKR_SWIFT",
+      { buy: null, sell: pkrSwiftSell, error: pkrSwiftError },
+      pkrSwiftConfig,
+    ),
   );
 
   return {
@@ -395,9 +432,9 @@ export const defaultReferenceRatesConfig = () => ({
       markup: 0.015,
       markdown: 0.015,
     }),
-    HKD_PKR: { displayDecimals: 3 },
-    CNY_PKR: { displayDecimals: 3 },
-    PKR_SWIFT: { displayDecimals: 3 },
+    HKD_PKR: normalizeDerivedPairInput("HKD_PKR", {}),
+    CNY_PKR: normalizeDerivedPairInput("CNY_PKR", {}),
+    PKR_SWIFT: normalizeDerivedPairInput("PKR_SWIFT", {}),
   },
 });
 
@@ -410,9 +447,7 @@ export const parseAndBuildConfig = (body) => {
     pairs[pairId] = normalizePairInput(pairId, body?.pairs?.[pairId] || {});
   }
   for (const pairId of DERIVED_PAIR_IDS) {
-    pairs[pairId] = {
-      displayDecimals: clampDisplayDecimals(body?.pairs?.[pairId]?.displayDecimals),
-    };
+    pairs[pairId] = normalizeDerivedPairInput(pairId, body?.pairs?.[pairId] || {});
   }
   const factor = toNum(body?.pkrSwiftFactor);
   return {

@@ -136,6 +136,138 @@ const normalizeInput = (pairId: ReferenceRatePairId, raw: ReferenceRatesUpdatePa
   };
 };
 
+const normalizeDerivedInput = (
+  pairId: ReferenceRatePairId,
+  raw: ReferenceRatesUpdatePayload["pairs"][ReferenceRatePairId] = {},
+) => {
+  const markup = toNum(raw?.markup) ?? 0;
+  const markdown = toNum(raw?.markdown) ?? 0;
+  const averageBase = toNum(raw?.averageBase);
+  return {
+    id: pairId,
+    label: REFERENCE_RATE_PAIR_LABELS[pairId],
+    kind: "derived" as const,
+    baseMode: "derived" as const,
+    averageBase: hasPositive(averageBase) ? averageBase : null,
+    baseBuy: null,
+    baseSell: null,
+    markup: Math.max(0, markup),
+    markdown: Math.max(0, markdown),
+    displayDecimals: clampDisplayDecimals(raw?.displayDecimals),
+  };
+};
+
+const applyDerivedSpreads = (
+  pairId: ReferenceRatePairId,
+  raw: { buy: number | null; sell: number | null; error: string | null },
+  config: ReturnType<typeof normalizeDerivedInput>,
+) => {
+  const markup = config.markup ?? 0;
+  const markdown = config.markdown ?? 0;
+  const storedBase = config.averageBase;
+  const autoBase =
+    pairId === "PKR_SWIFT"
+      ? raw.sell
+      : hasPositive(raw.buy) && hasPositive(raw.sell)
+        ? (raw.buy! + raw.sell!) / 2
+        : raw.sell ?? raw.buy;
+  const base = hasPositive(storedBase) ? storedBase : autoBase;
+
+  if (!hasPositive(base)) {
+    return { buy: null, sell: null, error: raw.error };
+  }
+
+  if (pairId === "PKR_SWIFT") {
+    return { buy: null, sell: base! * (1 + markup), error: raw.error };
+  }
+
+  return {
+    buy: base! * (1 - markdown),
+    sell: base! * (1 + markup),
+    error: raw.error,
+  };
+};
+
+export type DerivedPairId = "HKD_PKR" | "CNY_PKR" | "PKR_SWIFT";
+
+export const getDerivedAutoBase = (
+  pairId: DerivedPairId,
+  raw: { buy: number | null; sell: number | null },
+): number | null => {
+  if (pairId === "PKR_SWIFT") return raw.sell;
+  if (hasPositive(raw.buy) && hasPositive(raw.sell)) return (raw.buy! + raw.sell!) / 2;
+  return raw.sell ?? raw.buy;
+};
+
+const computeRawDerivedRates = (
+  normalized: Record<ReferenceRatePairId, ReferenceRatePair>,
+  pkrUsdtBuy: number | null,
+  pkrUsdtSell: number | null,
+  pkrSwiftFactor: number,
+) => {
+  const hkd = normalized.HKD_USDT;
+  const cny = normalized.CNY_USDT;
+
+  let hkdPkrBuy: number | null = null;
+  let hkdPkrSell: number | null = null;
+  let hkdPkrError: string | null = null;
+  if (!hasPositive(pkrUsdtBuy) || !hasPositive(pkrUsdtSell)) hkdPkrError = "missing_pkr_usdt";
+  else if (!hasPositive(hkd.baseSell)) hkdPkrError = "missing_hkd_base_sell";
+  else if (!hasPositive(hkd.baseBuy)) hkdPkrError = "missing_hkd_base_buy";
+  else {
+    hkdPkrBuy = pkrUsdtBuy! / hkd.baseSell!;
+    hkdPkrSell = pkrUsdtSell! / hkd.baseBuy!;
+  }
+
+  const cnyBench = getCnyBenchmarkBase(cny);
+  let cnyPkrBuy: number | null = null;
+  let cnyPkrSell: number | null = null;
+  let cnyPkrError: string | null = null;
+  if (!hasPositive(pkrUsdtBuy) || !hasPositive(pkrUsdtSell)) cnyPkrError = "missing_pkr_usdt";
+  else if (!hasPositive(cnyBench)) cnyPkrError = "missing_cny_benchmark";
+  else {
+    cnyPkrBuy = pkrUsdtBuy! / cnyBench!;
+    cnyPkrSell = pkrUsdtSell! / cnyBench!;
+  }
+
+  let pkrSwiftSell: number | null = null;
+  let pkrSwiftError: string | null = null;
+  if (!hasPositive(pkrUsdtSell)) pkrSwiftError = "missing_pkr_usdt_sell";
+  else pkrSwiftSell = pkrUsdtSell! * pkrSwiftFactor;
+
+  return {
+    HKD_PKR: { buy: hkdPkrBuy, sell: hkdPkrSell, error: hkdPkrError },
+    CNY_PKR: { buy: cnyPkrBuy, sell: cnyPkrSell, error: cnyPkrError },
+    PKR_SWIFT: { buy: null, sell: pkrSwiftSell, error: pkrSwiftError },
+  };
+};
+
+export const buildDerivedAutoBases = (
+  pairs: ReferenceRatesUpdatePayload["pairs"],
+  pkrSwiftFactor = 1.01,
+): Record<DerivedPairId, number | null> => {
+  const factor = hasPositive(toNum(pkrSwiftFactor)) ? toNum(pkrSwiftFactor)! : 1.01;
+  const normalized = Object.fromEntries(
+    CONFIG_PAIR_ORDER.map((id) => [id, normalizeInput(id, pairs?.[id])]),
+  ) as Record<ReferenceRatePairId, ReferenceRatePair>;
+
+  const pkrAedSell = computeStandaloneRates(normalized.PKR_AED).sell;
+  const aedBaseSell = normalized.AED_USDT.baseSell;
+  let pkrUsdtSell: number | null = null;
+  let pkrUsdtBuy: number | null = null;
+  if (hasPositive(pkrAedSell) && hasPositive(aedBaseSell)) {
+    pkrUsdtSell = pkrAedSell! * aedBaseSell! * (1 + normalized.PKR_USDT.markup);
+    pkrUsdtBuy = pkrUsdtSell * (1 - normalized.PKR_USDT.markdown);
+  }
+
+  const raw = computeRawDerivedRates(normalized, pkrUsdtBuy, pkrUsdtSell, factor);
+  return {
+    HKD_PKR: getDerivedAutoBase("HKD_PKR", raw.HKD_PKR),
+    CNY_PKR: getDerivedAutoBase("CNY_PKR", raw.CNY_PKR),
+    PKR_SWIFT: getDerivedAutoBase("PKR_SWIFT", raw.PKR_SWIFT),
+  };
+};
+
 const attach = (pair: Omit<ReferenceRatePair, "computedBuy" | "computedSell" | "computeError">, computed: {
   buy: number | null;
   sell: number | null;
@@ -193,77 +325,24 @@ export const buildPreviewFromForm = (
     { buy: hkd.baseBuy, sell: hkd.baseSell, error: null },
   );
 
-  let hkdPkrBuy: number | null = null;
-  let hkdPkrSell: number | null = null;
-  let hkdPkrError: string | null = null;
-  if (!hasPositive(pkrUsdtBuy) || !hasPositive(pkrUsdtSell)) hkdPkrError = "missing_pkr_usdt";
-  else if (!hasPositive(hkd.baseSell)) hkdPkrError = "missing_hkd_base_sell";
-  else if (!hasPositive(hkd.baseBuy)) hkdPkrError = "missing_hkd_base_buy";
-  else {
-    hkdPkrBuy = pkrUsdtBuy! / hkd.baseSell!;
-    hkdPkrSell = pkrUsdtSell! / hkd.baseBuy!;
-  }
+  const rawDerived = computeRawDerivedRates(normalized, pkrUsdtBuy, pkrUsdtSell, factor);
+
+  const hkdPkrConfig = normalizeDerivedInput("HKD_PKR", pairs?.HKD_PKR);
   result.HKD_PKR = attach(
-    {
-      id: "HKD_PKR",
-      label: REFERENCE_RATE_PAIR_LABELS.HKD_PKR,
-      kind: "derived",
-      baseMode: "derived",
-      averageBase: null,
-      baseBuy: null,
-      baseSell: null,
-      markup: 0,
-      markdown: 0,
-      displayDecimals: clampDisplayDecimals(pairs?.HKD_PKR?.displayDecimals),
-    },
-    { buy: hkdPkrBuy, sell: hkdPkrSell, error: hkdPkrError },
+    hkdPkrConfig,
+    applyDerivedSpreads("HKD_PKR", rawDerived.HKD_PKR, hkdPkrConfig),
   );
 
-  const cnyBench = getCnyBenchmarkBase(cny);
-  let cnyPkrBuy: number | null = null;
-  let cnyPkrSell: number | null = null;
-  let cnyPkrError: string | null = null;
-  if (!hasPositive(pkrUsdtBuy) || !hasPositive(pkrUsdtSell)) cnyPkrError = "missing_pkr_usdt";
-  else if (!hasPositive(cnyBench)) cnyPkrError = "missing_cny_benchmark";
-  else {
-    cnyPkrBuy = pkrUsdtBuy! / cnyBench!;
-    cnyPkrSell = pkrUsdtSell! / cnyBench!;
-  }
+  const cnyPkrConfig = normalizeDerivedInput("CNY_PKR", pairs?.CNY_PKR);
   result.CNY_PKR = attach(
-    {
-      id: "CNY_PKR",
-      label: REFERENCE_RATE_PAIR_LABELS.CNY_PKR,
-      kind: "derived",
-      baseMode: "derived",
-      averageBase: null,
-      baseBuy: null,
-      baseSell: null,
-      markup: 0,
-      markdown: 0,
-      displayDecimals: clampDisplayDecimals(pairs?.CNY_PKR?.displayDecimals),
-    },
-    { buy: cnyPkrBuy, sell: cnyPkrSell, error: cnyPkrError },
+    cnyPkrConfig,
+    applyDerivedSpreads("CNY_PKR", rawDerived.CNY_PKR, cnyPkrConfig),
   );
 
-  let pkrSwiftSell: number | null = null;
-  let pkrSwiftError: string | null = null;
-  if (!hasPositive(pkrUsdtSell)) pkrSwiftError = "missing_pkr_usdt_sell";
-  else pkrSwiftSell = pkrUsdtSell! * factor;
-
+  const pkrSwiftConfig = normalizeDerivedInput("PKR_SWIFT", pairs?.PKR_SWIFT);
   result.PKR_SWIFT = attach(
-    {
-      id: "PKR_SWIFT",
-      label: REFERENCE_RATE_PAIR_LABELS.PKR_SWIFT,
-      kind: "derived",
-      baseMode: "derived",
-      averageBase: null,
-      baseBuy: null,
-      baseSell: null,
-      markup: 0,
-      markdown: 0,
-      displayDecimals: clampDisplayDecimals(pairs?.PKR_SWIFT?.displayDecimals),
-    },
-    { buy: null, sell: pkrSwiftSell, error: pkrSwiftError },
+    pkrSwiftConfig,
+    applyDerivedSpreads("PKR_SWIFT", rawDerived.PKR_SWIFT, pkrSwiftConfig),
   );
 
   return result;
@@ -315,10 +394,22 @@ export const responseToFormPairs = (
   return pairs;
 };
 
-export const responseDerivedDecimals = (data: ReferenceRatesResponse) => ({
-  HKD_PKR: String(data.pairs.HKD_PKR?.displayDecimals ?? 3),
-  CNY_PKR: String(data.pairs.CNY_PKR?.displayDecimals ?? 3),
-  PKR_SWIFT: String(data.pairs.PKR_SWIFT?.displayDecimals ?? 3),
-});
+export const responseDerivedFormPairs = (
+  data: ReferenceRatesResponse,
+): Pick<ReferenceRatesUpdatePayload["pairs"], "HKD_PKR" | "CNY_PKR" | "PKR_SWIFT"> => {
+  const out = {} as Pick<ReferenceRatesUpdatePayload["pairs"], "HKD_PKR" | "CNY_PKR" | "PKR_SWIFT">;
+  for (const id of DERIVED_PAIR_ORDER) {
+    const derivedId = id as DerivedPairId;
+    const p = data.pairs[derivedId];
+    if (!p) continue;
+    out[derivedId] = {
+      averageBase: p.averageBase,
+      markup: p.markup,
+      markdown: p.markdown,
+      displayDecimals: p.displayDecimals,
+    };
+  }
+  return out;
+};
 
 export { CONFIG_PAIR_ORDER, DERIVED_PAIR_ORDER };
