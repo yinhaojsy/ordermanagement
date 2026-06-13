@@ -28,7 +28,9 @@ export default function StatCard({
       }`}
     >
       <div className="text-sm text-slate-600">{label}</div>
-      <div className={`mt-2 text-2xl font-semibold ${toneMap[tone]}`}>{value}</div>
+      <div className={`mt-1.5 text-xl font-semibold tabular-nums leading-tight ${toneMap[tone]}`}>
+        {value}
+      </div>
     </Component>
   );
 }

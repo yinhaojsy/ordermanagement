@@ -41,6 +41,12 @@ export const getProfitCalculation = (req, res, next) => {
       )
       .all(id);
 
+    const depositExchangeRates = db
+      .prepare(
+        `SELECT * FROM profit_deposit_exchange_rates WHERE profitCalculationId = ?;`,
+      )
+      .all(id);
+
     // Parse groups JSON
     let groups = [];
     try {
@@ -49,10 +55,18 @@ export const getProfitCalculation = (req, res, next) => {
       groups = [];
     }
 
+    const useLinkedDepositExchangeRates =
+      calculation.useLinkedDepositExchangeRates === undefined ||
+      calculation.useLinkedDepositExchangeRates === null
+        ? true
+        : Number(calculation.useLinkedDepositExchangeRates) === 1;
+
     res.json({
       ...calculation,
       multipliers,
       exchangeRates,
+      depositExchangeRates,
+      useLinkedDepositExchangeRates,
       groups,
     });
   } catch (error) {
@@ -112,6 +126,8 @@ export const createProfitCalculation = (req, res, next) => {
       ...row,
       multipliers: [],
       exchangeRates: [],
+      depositExchangeRates: [],
+      useLinkedDepositExchangeRates: true,
       groups,
     });
     scheduleCacheSync({
@@ -127,7 +143,8 @@ export const updateProfitCalculation = (req, res, next) => {
   try {
     const { id } = req.params;
     const body = req.body || {};
-    const { name, targetCurrencyCode, initialInvestment, groups } = body;
+    const { name, targetCurrencyCode, initialInvestment, groups, useLinkedDepositExchangeRates } =
+      body;
     
     // Check if calculation exists
     const existing = db
@@ -174,6 +191,15 @@ export const updateProfitCalculation = (req, res, next) => {
       }
       updates.groups = JSON.stringify(groups);
     }
+    if (useLinkedDepositExchangeRates !== undefined) {
+      const linked = useLinkedDepositExchangeRates === true || useLinkedDepositExchangeRates === 1;
+      updates.useLinkedDepositExchangeRates = linked ? 1 : 0;
+      if (linked) {
+        db.prepare("DELETE FROM profit_deposit_exchange_rates WHERE profitCalculationId = ?;").run(
+          id,
+        );
+      }
+    }
 
     if (Object.keys(updates).length === 0) {
       return res.status(400).json({ message: "No fields to update" });
@@ -200,10 +226,17 @@ export const updateProfitCalculation = (req, res, next) => {
     } catch (e) {
       parsedGroups = [];
     }
+
+    const linkedDepositRates =
+      row.useLinkedDepositExchangeRates === undefined ||
+      row.useLinkedDepositExchangeRates === null
+        ? true
+        : Number(row.useLinkedDepositExchangeRates) === 1;
     
     res.json({
       ...row,
       groups: parsedGroups,
+      useLinkedDepositExchangeRates: linkedDepositRates,
     });
     scheduleCacheSync({
       scopes: ["profitCalculations", "accounts", "customerLedger"],
@@ -427,6 +460,103 @@ export const updateExchangeRate = (req, res, next) => {
       )
       .get(id, fromCurrencyCode, toCurrencyCode);
     
+    res.json(row);
+    scheduleCacheSync({
+      scopes: ["profitCalculations", "accounts", "customerLedger"],
+      calculationId: Number(id),
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const updateDepositExchangeRate = (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { fromCurrencyCode, toCurrencyCode, rate } = req.body || {};
+
+    const calculation = db
+      .prepare("SELECT id, useLinkedDepositExchangeRates FROM profit_calculations WHERE id = ?")
+      .get(id);
+    if (!calculation) {
+      return res.status(404).json({ message: "Profit calculation not found" });
+    }
+
+    if (!fromCurrencyCode || !toCurrencyCode || rate === undefined) {
+      return res.status(400).json({
+        message: "From currency, to currency, and rate are required",
+      });
+    }
+
+    const fromCurrency = db
+      .prepare("SELECT code FROM currencies WHERE code = ? AND active = 1")
+      .get(fromCurrencyCode);
+    if (!fromCurrency) {
+      return res.status(400).json({ message: "From currency not found or inactive" });
+    }
+
+    const toCurrency = db
+      .prepare("SELECT code FROM currencies WHERE code = ? AND active = 1")
+      .get(toCurrencyCode);
+    if (!toCurrency) {
+      return res.status(400).json({ message: "To currency not found or inactive" });
+    }
+
+    const exchangeRate = parseFloat(rate);
+    if (isNaN(exchangeRate) || exchangeRate <= 0) {
+      return res.status(400).json({ message: "Invalid exchange rate" });
+    }
+
+    db.prepare(
+      "UPDATE profit_calculations SET useLinkedDepositExchangeRates = 0 WHERE id = ?;",
+    ).run(id);
+
+    const existing = db
+      .prepare(
+        `SELECT id FROM profit_deposit_exchange_rates
+         WHERE profitCalculationId = ? AND fromCurrencyCode = ? AND toCurrencyCode = ?`,
+      )
+      .get(id, fromCurrencyCode, toCurrencyCode);
+
+    if (existing) {
+      db.prepare(
+        `UPDATE profit_deposit_exchange_rates
+         SET rate = @rate
+         WHERE profitCalculationId = @profitCalculationId
+         AND fromCurrencyCode = @fromCurrencyCode
+         AND toCurrencyCode = @toCurrencyCode;`,
+      ).run({
+        profitCalculationId: id,
+        fromCurrencyCode,
+        toCurrencyCode,
+        rate: exchangeRate,
+      });
+    } else {
+      db.prepare(
+        `INSERT INTO profit_deposit_exchange_rates
+         (profitCalculationId, fromCurrencyCode, toCurrencyCode, rate, createdAt)
+         VALUES (@profitCalculationId, @fromCurrencyCode, @toCurrencyCode, @rate, @createdAt);`,
+      ).run({
+        profitCalculationId: id,
+        fromCurrencyCode,
+        toCurrencyCode,
+        rate: exchangeRate,
+        createdAt: new Date().toISOString(),
+      });
+    }
+
+    db.prepare("UPDATE profit_calculations SET updatedAt = @updatedAt WHERE id = @id;").run({
+      id,
+      updatedAt: new Date().toISOString(),
+    });
+
+    const row = db
+      .prepare(
+        `SELECT * FROM profit_deposit_exchange_rates
+         WHERE profitCalculationId = ? AND fromCurrencyCode = ? AND toCurrencyCode = ?;`,
+      )
+      .get(id, fromCurrencyCode, toCurrencyCode);
+
     res.json(row);
     scheduleCacheSync({
       scopes: ["profitCalculations", "accounts", "customerLedger"],

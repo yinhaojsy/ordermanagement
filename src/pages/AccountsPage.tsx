@@ -5,6 +5,8 @@ import SectionCard from "../components/common/SectionCard";
 import AlertModal from "../components/common/AlertModal";
 import ConfirmModal from "../components/common/ConfirmModal";
 import ProfitSummaryDisplay from "../components/profit/ProfitSummaryDisplay";
+import { CustomerDepositPoolsSection } from "../components/customerDeposits/CustomerDepositPoolsSection";
+import { AccountTransactionsPanel } from "../components/accounts/AccountTransactionsPanel";
 import {
   useGetAccountsQuery,
   useGetAccountsSummaryQuery,
@@ -19,6 +21,7 @@ import {
   useClearAllTransactionLogsMutation,
   useGetProfitCalculationsQuery,
   useGetProfitCalculationQuery,
+  useGetCustomerDepositTotalsByCurrencyQuery,
   useGetSettingQuery,
   useSetSettingMutation,
   useAddCurrencyMutation,
@@ -70,6 +73,9 @@ export default function AccountsPage() {
     defaultCalculation?.id || 0,
     { skip: !defaultCalculation || displayType !== "profit" }
   );
+  const { data: depositTotalsData } = useGetCustomerDepositTotalsByCurrencyQuery(undefined, {
+    skip: displayType !== "profit",
+  });
 
   const [alertModal, setAlertModal] = useState<{ isOpen: boolean; message: string; type?: "error" | "warning" | "info" | "success" }>({
     isOpen: false,
@@ -438,28 +444,12 @@ export default function AccountsPage() {
     }
   }, [fundsModalAccountId]);
 
-  // Handle Esc key to close transactions modal
-  useEffect(() => {
-    const handleEscKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && transactionsModalAccountId) {
-        setTransactionsModalAccountId(null);
-      }
-    };
-
-    if (transactionsModalAccountId) {
-      document.addEventListener("keydown", handleEscKey);
-      return () => {
-        document.removeEventListener("keydown", handleEscKey);
-      };
-    }
-  }, [transactionsModalAccountId]);
-
-
   // Use shared hook for profit summary calculation
   const profitSummary = useProfitSummary(
     displayType === "profit" ? defaultCalculationDetails : undefined,
     accounts,
-    currencies
+    currencies,
+    depositTotalsData?.currencies ?? [],
   );
 
   const handleToggleDisplay = async (newType: "currency" | "profit") => {
@@ -905,6 +895,8 @@ export default function AccountsPage() {
           </>
         )}
       </SectionCard>
+
+      <CustomerDepositPoolsSection variant="detailed" />
 
       {/* Currency Pools */}
       <SectionCard
@@ -1526,211 +1518,15 @@ export default function AccountsPage() {
         </div>
       )}
 
-      {/* Transactions Modal */}
-      {transactionsModalAccountId && selectedAccount && (
-        <div className="fixed top-0 left-0 right-0 bottom-0 w-full h-full z-[9999] flex items-center justify-center bg-black bg-opacity-50" style={{ margin: 0, padding: 0 }}>
-          <div
-            className="flex w-full max-w-2xl flex-col rounded-2xl border border-slate-200 bg-white p-6 shadow-lg max-h-[90vh] overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex shrink-0 items-center justify-between border-b border-slate-200 pb-4">
-              <h2 className="text-xl font-semibold text-slate-900">
-                {t("accounts.transactionsTitle")} - {selectedAccount.name}
-              </h2>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={handleExportSingleAccountTransactions}
-                  className="text-slate-400 hover:text-slate-600 transition-colors"
-                  aria-label={t("accounts.exportToExcel") || "Export to Excel"}
-                  title={t("accounts.exportToExcel") || "Export to Excel"}
-                >
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"
-                    />
-                  </svg>
-                </button>
-                <button
-                  onClick={() => setTransactionsModalAccountId(null)}
-                  className="text-slate-400 hover:text-slate-600 transition-colors"
-                  aria-label={t("common.close")}
-                >
-                  <svg
-                    className="w-6 h-6"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M6 18L18 6M6 6l12 12"
-                    />
-                  </svg>
-                </button>
-              </div>
-            </div>
-            <div className="flex-1 min-h-0 overflow-y-auto overflow-x-auto pt-4">
-              <table className="w-full text-left text-sm">
-                <thead className="sticky top-0 bg-white z-[1]">
-                  <tr className="border-b border-slate-200 text-slate-600">
-                    <th className="py-2">{t("accounts.date")}</th>
-                    <th className="py-2">{t("accounts.type")}</th>
-                    <th className="py-2">{t("accounts.amount")}</th>
-                    <th className="py-2">{t("accounts.description")}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {transactions.map((transaction) => (
-                    <tr key={transaction.id} className="border-b border-slate-100">
-                      <td className="py-2">{formatDate(transaction.createdAt)}</td>
-                      <td className="py-2">
-                        <Badge tone={transaction.type === "add" ? "emerald" : "rose"}>
-                          {transaction.type === "add"
-                            ? t("accounts.add")
-                            : t("accounts.withdraw")}
-                        </Badge>
-                      </td>
-                      <td className={`py-2 font-semibold ${
-                        transaction.type === "add" ? "text-emerald-600" : "text-rose-600"
-                      }`}>
-                        {transaction.type === "add" ? "+" : "-"}
-                        {transaction.amount.toLocaleString("en-US", {
-                          minimumFractionDigits: 2,
-                          maximumFractionDigits: 2,
-                        })}{" "}
-                        {selectedAccount.currencyCode}
-                      </td>
-                      <td className="py-2 text-slate-600">
-                        {(() => {
-                          const desc = transaction.description || "-";
-                          if (desc === "-") return desc;
-                          
-                          // Translate transaction descriptions
-                          let translated = desc;
-                          
-                          // Internal transfer to
-                          const transferToMatch = desc.match(/^Internal transfer to ([^:]+)(?:: (.+))?$/);
-                          if (transferToMatch) {
-                            const accountName = transferToMatch[1].trim();
-                            const description = transferToMatch[2] ? `: ${transferToMatch[2]}` : "";
-                            translated = t("accounts.internalTransferTo", { accountName, description });
-                          }
-                          
-                          // Internal transfer from
-                          const transferFromMatch = desc.match(/^Internal transfer from ([^:]+)(?:: (.+))?$/);
-                          if (transferFromMatch) {
-                            const accountName = transferFromMatch[1].trim();
-                            const description = transferFromMatch[2] ? `: ${transferFromMatch[2]}` : "";
-                            translated = t("accounts.internalTransferFrom", { accountName, description });
-                          }
-                          
-                          // Transaction fee for transfer from
-                          const feeMatch = desc.match(/^Transaction fee for transfer from ([^:]+)(?:: (.+))?$/);
-                          if (feeMatch) {
-                            const accountName = feeMatch[1].trim();
-                            const description = feeMatch[2] ? `: ${feeMatch[2]}` : "";
-                            translated = t("accounts.transactionFeeForTransfer", { accountName, description });
-                          }
-                          
-                          // Reversal
-                          const reversalMatch = desc.match(/^Reversal: (.+)$/);
-                          if (reversalMatch) {
-                            const originalDesc = reversalMatch[1];
-                            // Recursively translate the original description
-                            let originalTranslated = originalDesc;
-                            const revTransferToMatch = originalDesc.match(/^Internal transfer to ([^:]+)(?:: (.+))?$/);
-                            if (revTransferToMatch) {
-                              const accountName = revTransferToMatch[1].trim();
-                              const description = revTransferToMatch[2] ? `: ${revTransferToMatch[2]}` : "";
-                              originalTranslated = t("accounts.internalTransferTo", { accountName, description });
-                            }
-                            const revTransferFromMatch = originalDesc.match(/^Internal transfer from ([^:]+)(?:: (.+))?$/);
-                            if (revTransferFromMatch) {
-                              const accountName = revTransferFromMatch[1].trim();
-                              const description = revTransferFromMatch[2] ? `: ${revTransferFromMatch[2]}` : "";
-                              originalTranslated = t("accounts.internalTransferFrom", { accountName, description });
-                            }
-                            const revFeeMatch = originalDesc.match(/^Transaction fee for transfer from ([^:]+)(?:: (.+))?$/);
-                            if (revFeeMatch) {
-                              const accountName = revFeeMatch[1].trim();
-                              const description = revFeeMatch[2] ? `: ${revFeeMatch[2]}` : "";
-                              originalTranslated = t("accounts.transactionFeeForTransfer", { accountName, description });
-                            }
-                            translated = t("accounts.reversal", { description: originalTranslated });
-                          }
-                          
-                          // Expense
-                          const expenseMatch = desc.match(/^Expense(?:: (.+))?$/);
-                          if (expenseMatch) {
-                            const description = expenseMatch[1] ? `: ${expenseMatch[1]}` : "";
-                            translated = t("accounts.expense", { description });
-                          }
-                          
-                          // Reversal: Expense
-                          const expenseReversalMatch = desc.match(/^Reversal: Expense(?:: (.+))?$/);
-                          if (expenseReversalMatch) {
-                            const description = expenseReversalMatch[1] ? `: ${expenseReversalMatch[1]}` : "";
-                            translated = t("accounts.expenseReversal", { description });
-                          }
-                          
-                          // Reversal: Expense (Deleted)
-                          const expenseDeletedMatch = desc.match(/^Reversal: Expense(?:: (.+))? \(Deleted\)$/);
-                          if (expenseDeletedMatch) {
-                            const description = expenseDeletedMatch[1] ? `: ${expenseDeletedMatch[1]}` : "";
-                            translated = t("accounts.expenseDeleted", { description });
-                          }
-                          
-                          // Order receipt
-                          const orderReceiptMatch = desc.match(/^Order #(\d+) - Receipt from customer$/);
-                          if (orderReceiptMatch) {
-                            const orderId = orderReceiptMatch[1];
-                            translated = t("accounts.orderReceipt", { orderId });
-                          }
-                          
-                          // Order payment
-                          const orderPaymentMatch = desc.match(/^Order #(\d+) - Payment to customer$/);
-                          if (orderPaymentMatch) {
-                            const orderId = orderPaymentMatch[1];
-                            translated = t("accounts.orderPayment", { orderId });
-                          }
-                          
-                          // Order buy
-                          const orderBuyMatch = desc.match(/^Order #(\d+) - Buy$/);
-                          if (orderBuyMatch) {
-                            const orderId = orderBuyMatch[1];
-                            translated = t("accounts.orderBuy", { orderId });
-                          }
-                          
-                          // Order sell
-                          const orderSellMatch = desc.match(/^Order #(\d+) - Sell$/);
-                          if (orderSellMatch) {
-                            const orderId = orderSellMatch[1];
-                            translated = t("accounts.orderSell", { orderId });
-                          }
-                          
-                          return translated;
-                        })()}
-                      </td>
-                    </tr>
-                  ))}
-                  {transactions.length === 0 && (
-                    <tr>
-                      <td className="py-4 text-sm text-slate-500" colSpan={4}>
-                        {t("accounts.noTransactions")}
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
+      {selectedAccount ? (
+        <AccountTransactionsPanel
+          isOpen={!!transactionsModalAccountId}
+          onClose={() => setTransactionsModalAccountId(null)}
+          account={selectedAccount}
+          transactions={transactions}
+          onExport={handleExportSingleAccountTransactions}
+        />
+      ) : null}
 
       {/* Export Transaction Logs Modal */}
       {transactionExportModalOpen && (

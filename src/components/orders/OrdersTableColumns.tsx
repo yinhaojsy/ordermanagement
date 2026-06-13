@@ -6,6 +6,11 @@ import type { OrderStatus } from "../../types";
 import { formatDate } from "../../utils/format";
 import type { Account } from "../../types";
 import { StyledCurrencyAmount } from "../common/StyledCurrencyAmount";
+import {
+  formatOrderAccountLegName,
+  isCofAccountLeg,
+  type OrderAccountLeg,
+} from "../../utils/orders/orderAccounts";
 
 interface OrdersTableColumnsProps {
   columnKey: string;
@@ -39,6 +44,32 @@ function getAccountStyle(
     padding: "0.125rem 0.375rem",
     display: "inline-block",
   };
+}
+
+function getCofStyle(): React.CSSProperties {
+  return {
+    fontWeight: 600,
+    borderRadius: "0.375rem",
+    padding: "0.125rem 0.375rem",
+    display: "inline-block",
+    backgroundColor: "#f1f5f9",
+    color: "#475569",
+  };
+}
+
+function accountLegDisplayName(leg: OrderAccountLeg, t: (key: string) => string): string {
+  return formatOrderAccountLegName(leg, t("orders.cof"));
+}
+
+function accountLegCellStyle(
+  leg: OrderAccountLeg | null,
+  accounts: Account[],
+  currencyByCode: Map<string, Currency>,
+  fallbackAccountId?: number | null,
+): React.CSSProperties | undefined {
+  if (!leg) return getAccountStyle(fallbackAccountId, accounts, currencyByCode);
+  if (isCofAccountLeg(leg)) return getCofStyle();
+  return getAccountStyle(leg.accountId, accounts, currencyByCode);
 }
 
 /**
@@ -163,8 +194,16 @@ export function renderOrderCell({
             : [];
 
       const firstAccount = buyAccounts.length > 0 ? buyAccounts[0] : null;
-      const accountName = firstAccount?.accountName || fallbackAccountName || "-";
-      const buyAccountStyle = getAccountStyle(order.buyAccountId, accounts, currencyByCode);
+      const accountName = firstAccount
+        ? accountLegDisplayName(firstAccount, t)
+        : fallbackAccountName || "-";
+      const buyAccountStyle = firstAccount
+        ? accountLegCellStyle(firstAccount, accounts, currencyByCode, order.buyAccountId)
+        : getAccountStyle(order.buyAccountId, accounts, currencyByCode);
+      const buyAccountsForTooltip = buyAccounts.map((a) => ({
+        ...a,
+        accountName: accountLegDisplayName(a, t),
+      }));
 
       // Check if profit or service charge should appear in buy account tooltip
       // Buy account is for fromCurrency, so check if profit/service charge currency matches fromCurrency
@@ -204,7 +243,7 @@ export function renderOrderCell({
         <td key={columnKey} className="py-2 text-slate-600">
           {shouldShowTooltip ? (
             <AccountTooltip 
-              accounts={buyAccounts} 
+              accounts={buyAccountsForTooltip} 
               label={t("orders.buyAccount")}
               profitAmount={showProfitInBuy ? order.profitAmount : null}
               profitCurrency={showProfitInBuy ? order.profitCurrency : null}
@@ -249,8 +288,16 @@ export function renderOrderCell({
             : [];
 
       const firstAccount = sellAccounts.length > 0 ? sellAccounts[0] : null;
-      const accountName = firstAccount?.accountName || fallbackAccountName || "-";
-      const sellAccountStyle = getAccountStyle(order.sellAccountId, accounts, currencyByCode);
+      const accountName = firstAccount
+        ? accountLegDisplayName(firstAccount, t)
+        : fallbackAccountName || "-";
+      const sellAccountStyle = firstAccount
+        ? accountLegCellStyle(firstAccount, accounts, currencyByCode, order.sellAccountId)
+        : getAccountStyle(order.sellAccountId, accounts, currencyByCode);
+      const sellAccountsForTooltip = sellAccounts.map((a) => ({
+        ...a,
+        accountName: accountLegDisplayName(a, t),
+      }));
 
       // Check if profit or service charge should appear in sell account tooltip
       // Sell account is for toCurrency, so check if profit/service charge currency matches toCurrency
@@ -290,7 +337,7 @@ export function renderOrderCell({
         <td key={columnKey} className="py-2 text-slate-600">
           {shouldShowTooltip ? (
             <AccountTooltip 
-              accounts={sellAccounts} 
+              accounts={sellAccountsForTooltip} 
               label={t("orders.sellAccount")}
               profitAmount={showProfitInSell ? order.profitAmount : null}
               profitCurrency={showProfitInSell ? order.profitCurrency : null}

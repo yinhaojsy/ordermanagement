@@ -9,8 +9,7 @@ const defaultFilters: OrderFilters = {
   handlerId: null,
   customerId: null,
   currencyPairs: [],
-  accountId: null,
-  accountRole: 'any',
+  accountSearch: "",
   status: null,
   tagIds: [],
 };
@@ -24,27 +23,25 @@ export function useOrdersFilters(
     ...defaultFilters,
     ...initialFilters,
   }));
+  const [debouncedAccountSearch, setDebouncedAccountSearch] = useState(
+    () => (initialFilters?.accountSearch ?? "").trim(),
+  );
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedAccountSearch(filters.accountSearch.trim()), 300);
+    return () => clearTimeout(timer);
+  }, [filters.accountSearch]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [debouncedAccountSearch, setCurrentPage]);
 
   // Apply initial filters if provided after mount
   useEffect(() => {
     if (initialFilters && Object.keys(initialFilters).length > 0) {
-      const legacy = initialFilters as Partial<OrderFilters> & {
-        buyAccountId?: number | null;
-        sellAccountId?: number | null;
-      };
-      const mapped: Partial<OrderFilters> = { ...initialFilters };
-      if (mapped.accountId == null) {
-        if (legacy.buyAccountId != null) {
-          mapped.accountId = legacy.buyAccountId;
-          mapped.accountRole = mapped.accountRole ?? 'buy';
-        } else if (legacy.sellAccountId != null) {
-          mapped.accountId = legacy.sellAccountId;
-          mapped.accountRole = mapped.accountRole ?? 'sell';
-        }
-      }
       setFilters((prev) => ({
         ...prev,
-        ...mapped,
+        ...initialFilters,
       }));
       setCurrentPage(1);
     }
@@ -58,7 +55,8 @@ export function useOrdersFilters(
   const buildQueryParams = useCallback((
     filterState: OrderFilters,
     includePagination = false,
-    page?: number
+    page?: number,
+    accountSearchOverride?: string,
   ): OrderQueryParams => {
     const params: OrderQueryParams = {};
 
@@ -69,12 +67,8 @@ export function useOrdersFilters(
     if (filterState.currencyPairs.length > 0) {
       params.currencyPairs = filterState.currencyPairs.join(',');
     }
-    if (filterState.accountId !== null) {
-      params.accountId = filterState.accountId;
-      if (filterState.accountRole !== 'any') {
-        params.accountRole = filterState.accountRole;
-      }
-    }
+    const accountSearch = (accountSearchOverride ?? filterState.accountSearch).trim();
+    if (accountSearch) params.accountSearch = accountSearch;
     if (filterState.status) params.status = filterState.status;
     if (filterState.tagIds.length > 0) params.tagIds = filterState.tagIds.join(',');
     
@@ -126,6 +120,7 @@ export function useOrdersFilters(
   // Clear all filters
   const handleClearFilters = useCallback(() => {
     setFilters(defaultFilters);
+    setDebouncedAccountSearch("");
     setCurrentPage(1);
   }, [setCurrentPage]);
 
@@ -135,14 +130,22 @@ export function useOrdersFilters(
     value: OrderFilters[K]
   ) => {
     setFilters((prev) => ({ ...prev, [key]: value }));
-    setCurrentPage(1);
+    if (key !== "accountSearch") {
+      setCurrentPage(1);
+    }
   }, [setCurrentPage]);
 
   // Build query parameters for API
-  const queryParams = useMemo(() => buildQueryParams(filters, true, currentPage), [filters, currentPage, buildQueryParams]);
+  const queryParams = useMemo(
+    () => buildQueryParams(filters, true, currentPage, debouncedAccountSearch),
+    [filters, currentPage, debouncedAccountSearch, buildQueryParams],
+  );
 
   // Build export query parameters (same as queryParams but without pagination)
-  const exportQueryParams = useMemo(() => buildQueryParams(filters, false), [filters, buildQueryParams]);
+  const exportQueryParams = useMemo(
+    () => buildQueryParams(filters, false, undefined, debouncedAccountSearch),
+    [filters, debouncedAccountSearch, buildQueryParams],
+  );
 
   return {
     filters,
@@ -161,4 +164,3 @@ export function useOrdersFilters(
     tagFilterListRef,
   };
 }
-

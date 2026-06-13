@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
+import React, { useCallback, useEffect, useMemo, useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
 import Badge from "../common/Badge";
 import { formatDate } from "../../utils/format";
 import { RemarksSection } from "./RemarksSection";
@@ -408,6 +408,52 @@ const OtcOrderForm = ({
     (c) => c.allocatable >= 0.005 || c.allocatableAdvance >= 0.005,
   );
 
+  const computeOtcSellFromBuy = useCallback(
+    (buyStr: string, rateStr: string, from: string, to: string) => {
+      const rate = Number(rateStr);
+      if (!buyStr || !rateStr || Number.isNaN(rate) || rate <= 0) return null;
+      const baseIsFrom = getBaseCurrency(from, to);
+      if (baseIsFrom === true) return (Number(buyStr) * rate).toFixed(4);
+      if (baseIsFrom === false) return (Number(buyStr) / rate).toFixed(4);
+      return (Number(buyStr) * rate).toFixed(4);
+    },
+    [getBaseCurrency],
+  );
+
+  const computeOtcBuyFromSell = useCallback(
+    (sellStr: string, rateStr: string, from: string, to: string) => {
+      const rate = Number(rateStr);
+      if (!sellStr || !rateStr || Number.isNaN(rate) || rate <= 0) return null;
+      const baseIsFrom = getBaseCurrency(from, to);
+      if (baseIsFrom === true) return (Number(sellStr) / rate).toFixed(4);
+      if (baseIsFrom === false) return (Number(sellStr) * rate).toFixed(4);
+      return (Number(sellStr) / rate).toFixed(4);
+    },
+    [getBaseCurrency],
+  );
+
+  const fillOtcBuy = useCallback(
+    (amount: string) => {
+      setOtcForm((p) => {
+        const sellAmount =
+          computeOtcSellFromBuy(amount, p.rate, p.fromCurrency, p.toCurrency) ?? p.amountSell;
+        return { ...p, amountBuy: amount, amountSell: sellAmount };
+      });
+    },
+    [computeOtcSellFromBuy, setOtcForm],
+  );
+
+  const fillOtcSell = useCallback(
+    (amount: string) => {
+      setOtcForm((p) => {
+        const buyAmount =
+          computeOtcBuyFromSell(amount, p.rate, p.fromCurrency, p.toCurrency) ?? p.amountBuy;
+        return { ...p, amountSell: amount, amountBuy: buyAmount };
+      });
+    },
+    [computeOtcBuyFromSell, setOtcForm],
+  );
+
   // Track the current default handler ID to update button state immediately
   const [defaultHandlerId, setDefaultHandlerId] = useState<string | null>(() => {
     if (authUser?.id) {
@@ -499,6 +545,10 @@ const OtcOrderForm = ({
             <CustomerFundingSummaryInline
               items={otcFundingSummary}
               loading={otcFundingSummaryLoading}
+              fromCurrency={otcForm.fromCurrency}
+              toCurrency={otcForm.toCurrency}
+              onFillBuy={fillOtcBuy}
+              onFillSell={fillOtcSell}
             />
           ) : null}
         </div>

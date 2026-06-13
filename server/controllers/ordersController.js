@@ -29,6 +29,18 @@ import {
   normalizeReceiptFundedFrom,
   RECEIPT_FUNDED_CUSTOMER_BALANCE,
 } from "../utils/orderReceiptFunding.js";
+import {
+  isLedgerSwapOrder,
+  normalizeOrderMode,
+  ORDER_MODE_LEDGER_SWAP,
+} from "../utils/orderMode.js";
+
+function ledgerSwapFunding(order, fundedFromRaw) {
+  if (isLedgerSwapOrder(order)) {
+    return RECEIPT_FUNDED_CUSTOMER_BALANCE;
+  }
+  return normalizeReceiptFundedFrom(fundedFromRaw);
+}
 
 function trySyncCompletedOrderLedger(orderId, userId) {
   try {
@@ -180,6 +192,7 @@ const ORDER_AUDIT_FIELDS = [
   "sellAccountId",
   "handlerId",
   "orderType",
+  "orderMode",
 ];
 
 function pickOrderAuditSnapshot(row) {
@@ -262,39 +275,158 @@ function userCanAccessOrderForListing(userId, orderId) {
   return Boolean(db.prepare(sql).get(params));
 }
 
-/** Filter orders by account on receipts (buy), payments (sell), or any leg including service charges. */
-function appendOrderAccountFilter(conditions, params, accountId, accountRole) {
-  const id = parseInt(accountId, 10);
-  if (!id || Number.isNaN(id)) return;
-  params.accountId = id;
-  const role = String(accountRole || "any").toLowerCase();
-  if (role === "buy") {
-    conditions.push(`EXISTS (
-      SELECT 1 FROM order_receipts r
-      WHERE r.orderId = o.id AND r.accountId = @accountId
-    )`);
-  } else if (role === "sell") {
-    conditions.push(`EXISTS (
-      SELECT 1 FROM order_payments p
-      WHERE p.orderId = o.id AND p.accountId = @accountId
-    )`);
-  } else {
-    conditions.push(`(
-      EXISTS (
-        SELECT 1 FROM order_receipts r
-        WHERE r.orderId = o.id AND r.accountId = @accountId
-      )
-      OR EXISTS (
-        SELECT 1 FROM order_payments p
-        WHERE p.orderId = o.id AND p.accountId = @accountId
-      )
-      OR EXISTS (
-        SELECT 1 FROM order_service_charges sc
-        WHERE sc.orderId = o.id AND sc.accountId = @accountId
-      )
-      OR o.serviceChargeAccountId = @accountId
-    )`);
+export const COF_ACCOUNT_LABEL = "COF";
+
+function buildBuyAccountsForOrder(orderId) {
+  const cash = db
+    .prepare(
+      `SELECT r.accountId, a.name as accountName, SUM(r.amount) as totalAmount, MIN(r.createdAt) as firstCreatedAt
+       FROM order_receipts r
+       LEFT JOIN accounts a ON a.id = r.accountId
+       WHERE r.orderId = ? AND r.accountId IS NOT NULL
+       GROUP BY r.accountId, a.name
+       ORDER BY firstCreatedAt ASC;`,
+    )
+    .all(orderId);
+
+  const cofRow = db
+    .prepare(
+      `SELECT COALESCE(SUM(amount), 0) AS totalAmount, MIN(createdAt) AS firstCreatedAt
+       FROM order_receipts
+       WHERE orderId = ? AND fundedFrom = 'customer_balance';`,
+    )
+    .get(orderId);
+
+  const entries = cash.map((r) => ({
+    accountId: r.accountId,
+    accountName: r.accountName || `Account #${r.accountId}`,
+    amount: r.totalAmount,
+    firstCreatedAt: r.firstCreatedAt,
+    isCof: false,
+  }));
+
+  if (cofRow && Number(cofRow.totalAmount) > 0) {
+    entries.push({
+      accountId: null,
+      accountName: COF_ACCOUNT_LABEL,
+      amount: cofRow.totalAmount,
+      firstCreatedAt: cofRow.firstCreatedAt,
+      isCof: true,
+    });
   }
+
+  entries.sort(
+    (a, b) => new Date(a.firstCreatedAt).getTime() - new Date(b.firstCreatedAt).getTime(),
+  );
+
+  return entries.map(({ accountId, accountName, amount, isCof }) => ({
+    accountId,
+    accountName,
+    amount,
+    isCof,
+  }));
+}
+
+function buildSellAccountsForOrder(orderId) {
+  const cash = db
+    .prepare(
+      `SELECT p.accountId, a.name as accountName, SUM(p.amount) as totalAmount, MIN(p.createdAt) as firstCreatedAt
+       FROM order_payments p
+       LEFT JOIN accounts a ON a.id = p.accountId
+       WHERE p.orderId = ? AND p.accountId IS NOT NULL
+       GROUP BY p.accountId, a.name
+       ORDER BY firstCreatedAt ASC;`,
+    )
+    .all(orderId);
+
+  const cofRow = db
+    .prepare(
+      `SELECT COALESCE(SUM(amount), 0) AS totalAmount, MIN(createdAt) AS firstCreatedAt
+       FROM order_payments
+       WHERE orderId = ? AND fundedFrom = 'customer_balance';`,
+    )
+    .get(orderId);
+
+  const entries = cash.map((p) => ({
+    accountId: p.accountId,
+    accountName: p.accountName || `Account #${p.accountId}`,
+    amount: p.totalAmount,
+    firstCreatedAt: p.firstCreatedAt,
+    isCof: false,
+  }));
+
+  if (cofRow && Number(cofRow.totalAmount) > 0) {
+    entries.push({
+      accountId: null,
+      accountName: COF_ACCOUNT_LABEL,
+      amount: cofRow.totalAmount,
+      firstCreatedAt: cofRow.firstCreatedAt,
+      isCof: true,
+    });
+  }
+
+  entries.sort(
+    (a, b) => new Date(a.firstCreatedAt).getTime() - new Date(b.firstCreatedAt).getTime(),
+  );
+
+  return entries.map(({ accountId, accountName, amount, isCof }) => ({
+    accountId,
+    accountName,
+    amount,
+    isCof,
+  }));
+}
+
+/** Filter orders where any account name matches keyword (receipts, payments, SC, profit, legacy). */
+function appendOrderAccountSearchFilter(conditions, params, searchRaw) {
+  const q = String(searchRaw || "").trim().toLowerCase();
+  if (!q) return;
+  params.accountSearch = `%${q}%`;
+
+  const COF_LABEL = "cof";
+  const matchCof = COF_LABEL.includes(q) || q.includes(COF_LABEL);
+
+  const parts = [
+    `EXISTS (
+      SELECT 1 FROM order_receipts r
+      INNER JOIN accounts a ON a.id = r.accountId
+      WHERE r.orderId = o.id AND lower(a.name) LIKE @accountSearch
+    )`,
+    `EXISTS (
+      SELECT 1 FROM order_payments p
+      INNER JOIN accounts a ON a.id = p.accountId
+      WHERE p.orderId = o.id AND lower(a.name) LIKE @accountSearch
+    )`,
+    `EXISTS (
+      SELECT 1 FROM order_service_charges sc
+      INNER JOIN accounts a ON a.id = sc.accountId
+      WHERE sc.orderId = o.id AND lower(a.name) LIKE @accountSearch
+    )`,
+    `EXISTS (
+      SELECT 1 FROM order_profits op
+      INNER JOIN accounts a ON a.id = op.accountId
+      WHERE op.orderId = o.id AND lower(a.name) LIKE @accountSearch
+    )`,
+    `EXISTS (
+      SELECT 1 FROM accounts ba
+      WHERE ba.id = o.buyAccountId AND lower(ba.name) LIKE @accountSearch
+    )`,
+    `EXISTS (
+      SELECT 1 FROM accounts sa
+      WHERE sa.id = o.sellAccountId AND lower(sa.name) LIKE @accountSearch
+    )`,
+  ];
+
+  if (matchCof) {
+    parts.push(
+      `EXISTS (SELECT 1 FROM order_receipts r2 WHERE r2.orderId = o.id AND r2.fundedFrom = 'customer_balance')`,
+      `EXISTS (SELECT 1 FROM order_payments p2 WHERE p2.orderId = o.id AND p2.fundedFrom = 'customer_balance')`,
+      `EXISTS (SELECT 1 FROM order_service_charges sc2 WHERE sc2.orderId = o.id AND sc2.fundedFrom = 'customer_balance')`,
+      `COALESCE(o.orderMode, 'exchange') = 'ledger_swap'`,
+    );
+  }
+
+  conditions.push(`(${parts.join(" OR ")})`);
 }
 
 function listGlobalPinnedOrderIds() {
@@ -441,8 +573,7 @@ export const listOrders = (req, res) => {
     fromCurrency,
     toCurrency,
     currencyPairs,
-    accountId,
-    accountRole,
+    accountSearch,
     status,
     orderType,
     tagId,
@@ -526,8 +657,8 @@ export const listOrders = (req, res) => {
       params.toCurrency = toCurrency;
     }
   }
-  if (accountId) {
-    appendOrderAccountFilter(conditions, params, accountId, accountRole);
+  if (accountSearch) {
+    appendOrderAccountSearchFilter(conditions, params, accountSearch);
   }
   if (status) {
     conditions.push('o.status = @status');
@@ -655,42 +786,8 @@ export const listOrders = (req, res) => {
         .get(order.id);
       const hasBeneficiaries = (beneficiaryCount?.count || 0) > 0;
 
-      // Aggregate account data from receipts (buy accounts)
-      const receipts = db
-        .prepare(
-          `SELECT r.accountId, a.name as accountName, SUM(r.amount) as totalAmount, MIN(r.createdAt) as firstCreatedAt
-           FROM order_receipts r
-           LEFT JOIN accounts a ON a.id = r.accountId
-           WHERE r.orderId = ? AND r.accountId IS NOT NULL
-           GROUP BY r.accountId, a.name
-           ORDER BY firstCreatedAt ASC;`
-        )
-        .all(order.id);
-      
-      // Aggregate account data from payments (sell accounts)
-      const payments = db
-        .prepare(
-          `SELECT p.accountId, a.name as accountName, SUM(p.amount) as totalAmount, MIN(p.createdAt) as firstCreatedAt
-           FROM order_payments p
-           LEFT JOIN accounts a ON a.id = p.accountId
-           WHERE p.orderId = ? AND p.accountId IS NOT NULL
-           GROUP BY p.accountId, a.name
-           ORDER BY firstCreatedAt ASC;`
-        )
-        .all(order.id);
-
-      // Format the account data
-      const buyAccounts = receipts.map(r => ({
-        accountId: r.accountId,
-        accountName: r.accountName || `Account #${r.accountId}`,
-        amount: r.totalAmount
-      }));
-
-      const sellAccounts = payments.map(p => ({
-        accountId: p.accountId,
-        accountName: p.accountName || `Account #${p.accountId}`,
-        amount: p.totalAmount
-      }));
+      const buyAccounts = buildBuyAccountsForOrder(order.id);
+      const sellAccounts = buildSellAccountsForOrder(order.id);
 
       // Get tags for this order
       const tags = db
@@ -898,8 +995,7 @@ export const exportOrders = (req, res) => {
     fromCurrency,
     toCurrency,
     currencyPairs,
-    accountId,
-    accountRole,
+    accountSearch,
     status,
     orderType,
     tagId,
@@ -981,8 +1077,8 @@ export const exportOrders = (req, res) => {
       params.toCurrency = toCurrency;
     }
   }
-  if (accountId) {
-    appendOrderAccountFilter(conditions, params, accountId, accountRole);
+  if (accountSearch) {
+    appendOrderAccountSearchFilter(conditions, params, accountSearch);
   }
   if (status) {
     conditions.push('o.status = @status');
@@ -1045,39 +1141,8 @@ export const exportOrders = (req, res) => {
         .get(order.id);
       const hasBeneficiaries = (beneficiaryCount?.count || 0) > 0;
 
-      const receipts = db
-        .prepare(
-          `SELECT r.accountId, a.name as accountName, SUM(r.amount) as totalAmount, MIN(r.createdAt) as firstCreatedAt
-           FROM order_receipts r
-           LEFT JOIN accounts a ON a.id = r.accountId
-           WHERE r.orderId = ? AND r.accountId IS NOT NULL
-           GROUP BY r.accountId, a.name
-           ORDER BY firstCreatedAt ASC;`
-        )
-        .all(order.id);
-      
-      const payments = db
-        .prepare(
-          `SELECT p.accountId, a.name as accountName, SUM(p.amount) as totalAmount, MIN(p.createdAt) as firstCreatedAt
-           FROM order_payments p
-           LEFT JOIN accounts a ON a.id = p.accountId
-           WHERE p.orderId = ? AND p.accountId IS NOT NULL
-           GROUP BY p.accountId, a.name
-           ORDER BY firstCreatedAt ASC;`
-        )
-        .all(order.id);
-
-      const buyAccounts = receipts.map(r => ({
-        accountId: r.accountId,
-        accountName: r.accountName || `Account #${r.accountId}`,
-        amount: r.totalAmount
-      }));
-
-      const sellAccounts = payments.map(p => ({
-        accountId: p.accountId,
-        accountName: p.accountName || `Account #${p.accountId}`,
-        amount: p.totalAmount
-      }));
+      const buyAccounts = buildBuyAccountsForOrder(order.id);
+      const sellAccounts = buildSellAccountsForOrder(order.id);
 
       // Get tags for this order
       const tags = db
@@ -1260,6 +1325,13 @@ export const createOrder = async (req, res, next) => {
     }
     orderData.customerId = resolvedCustomerId;
 
+    const orderMode = normalizeOrderMode(orderData.orderMode);
+    orderData.orderMode = orderMode;
+    if (orderMode === ORDER_MODE_LEDGER_SWAP) {
+      orderData.buyAccountId = null;
+      orderData.sellAccountId = null;
+    }
+
     if (orderData.handlerId !== undefined && orderData.handlerId !== null && orderData.handlerId !== "") {
       const handler = db.prepare("SELECT id, name FROM users WHERE id = ?").get(orderData.handlerId);
       if (!handler) {
@@ -1382,7 +1454,8 @@ export const createOrder = async (req, res, next) => {
          serviceChargeAccountId,
          createdBy,
          createdAt,
-         orderDate
+         orderDate,
+         orderMode
        ) VALUES (
          @customerId,
          @fromCurrency,
@@ -1403,7 +1476,8 @@ export const createOrder = async (req, res, next) => {
          @serviceChargeAccountId,
          @createdBy,
          @createdAt,
-         @orderDate
+         @orderDate,
+         @orderMode
        );`,
     );
     const rowForInsert = { ...orderData };
@@ -1429,6 +1503,7 @@ export const createOrder = async (req, res, next) => {
       createdBy: userId,
       createdAt: nowIso,
       orderDate: orderData.orderDate ? new Date(orderData.orderDate).toISOString() : nowIso,
+      orderMode,
     });
     
     const orderId = result.lastInsertRowid;
@@ -1714,7 +1789,7 @@ export const updateOrder = async (req, res, next) => {
 
     // Fields that can only be updated when order is pending (saved)
     // Users with editAnyOrder permission can update these fields regardless of status
-    const pendingOnlyFields = ["customerId", "fromCurrency", "toCurrency", "amountBuy", "amountSell", "rate"];
+    const pendingOnlyFields = ["customerId", "fromCurrency", "toCurrency", "amountBuy", "amountSell", "rate", "orderMode"];
     // Fields that can be updated at any time (service charges and profit)
     const alwaysUpdatableFields = [
       "serviceChargeAmount",
@@ -2760,7 +2835,7 @@ export const addReceipt = (req, res, next) => {
     // Check if order exists first and get paymentFlow and status
     const order = db
       .prepare(
-        "SELECT id, customerId, createdBy, handlerId, fromCurrency, toCurrency, amountBuy, amountSell, paymentFlow, buyAccountId, status, orderType FROM orders WHERE id = ?;",
+        "SELECT id, customerId, createdBy, handlerId, fromCurrency, toCurrency, amountBuy, amountSell, paymentFlow, buyAccountId, status, orderType, orderMode FROM orders WHERE id = ?;",
       )
       .get(id);
     if (!order) {
@@ -2789,7 +2864,7 @@ export const addReceipt = (req, res, next) => {
       return res.status(400).json({ message: "Amount is required" });
     }
 
-    const fundedFrom = normalizeReceiptFundedFrom(fundedFromRaw);
+    const fundedFrom = ledgerSwapFunding(order, fundedFromRaw);
     const receiptAmount = parseFloat(amount);
     if (!receiptAmount || receiptAmount <= 0) {
       return res.status(400).json({ message: "Amount must be a positive number" });
@@ -3091,7 +3166,7 @@ export const addPayment = (req, res, next) => {
 
     const order = db
       .prepare(
-        "SELECT id, createdBy, handlerId, customerId, toCurrency, amountSell, paymentFlow, sellAccountId, rate, orderType FROM orders WHERE id = ?;",
+        "SELECT id, createdBy, handlerId, customerId, toCurrency, amountSell, paymentFlow, sellAccountId, rate, orderType, orderMode FROM orders WHERE id = ?;",
       )
       .get(id);
     if (!order) {
@@ -3120,7 +3195,7 @@ export const addPayment = (req, res, next) => {
       return res.status(400).json({ message: "Amount is required" });
     }
 
-    const fundedFrom = normalizeReceiptFundedFrom(fundedFromRaw);
+    const fundedFrom = ledgerSwapFunding(order, fundedFromRaw);
     const paymentAmount = parseFloat(amount);
     if (!paymentAmount || paymentAmount <= 0) {
       return res.status(400).json({ message: "Amount must be a positive number" });
@@ -3226,7 +3301,7 @@ export const updateReceipt = (req, res, next) => {
     }
 
     const order = db
-      .prepare("SELECT id, customerId, fromCurrency FROM orders WHERE id = ?;")
+      .prepare("SELECT id, customerId, fromCurrency, orderMode FROM orders WHERE id = ?;")
       .get(existingReceipt.orderId);
     if (!order) {
       return res.status(404).json({ message: "Order not found" });
@@ -3246,8 +3321,8 @@ export const updateReceipt = (req, res, next) => {
 
     const fundedFrom =
       fundedFromRaw !== undefined
-        ? normalizeReceiptFundedFrom(fundedFromRaw)
-        : normalizeReceiptFundedFrom(existingReceipt.fundedFrom);
+        ? ledgerSwapFunding(order, fundedFromRaw)
+        : ledgerSwapFunding(order, existingReceipt.fundedFrom);
 
     const receiptAmount = amount !== undefined ? parseFloat(amount) : existingReceipt.amount;
     if (!receiptAmount || receiptAmount <= 0) {
@@ -3548,7 +3623,7 @@ export const updatePayment = (req, res, next) => {
     }
 
     const order = db
-      .prepare("SELECT id, customerId, toCurrency FROM orders WHERE id = ?;")
+      .prepare("SELECT id, customerId, toCurrency, orderMode FROM orders WHERE id = ?;")
       .get(existingPayment.orderId);
     if (!order) {
       return res.status(404).json({ message: "Order not found" });
@@ -3568,8 +3643,8 @@ export const updatePayment = (req, res, next) => {
 
     const fundedFrom =
       fundedFromRaw !== undefined
-        ? normalizeReceiptFundedFrom(fundedFromRaw)
-        : normalizeReceiptFundedFrom(existingPayment.fundedFrom);
+        ? ledgerSwapFunding(order, fundedFromRaw)
+        : ledgerSwapFunding(order, existingPayment.fundedFrom);
 
     const paymentAmount = amount !== undefined ? parseFloat(amount) : existingPayment.amount;
     if (!paymentAmount || paymentAmount <= 0) {
@@ -3723,7 +3798,7 @@ export const confirmPayment = (req, res, next) => {
     // Check permissions - get order info (fetch all fields needed for later use)
     const order = db
       .prepare(
-        "SELECT id, createdBy, handlerId, customerId, fromCurrency, toCurrency, amountBuy, amountSell, paymentFlow, actualAmountBuy, rate, actualRate, status FROM orders WHERE id = ?;",
+        "SELECT id, createdBy, handlerId, customerId, fromCurrency, toCurrency, amountBuy, amountSell, paymentFlow, actualAmountBuy, rate, actualRate, status, orderMode FROM orders WHERE id = ?;",
       )
       .get(payment.orderId);
     if (userId && order) {
@@ -3745,13 +3820,15 @@ export const confirmPayment = (req, res, next) => {
           message: "Order must have a customer to settle payment from customer advance",
         });
       }
-      try {
-        assertAllocatableOwed(order.customerId, order.toCurrency, payment.amount, paymentId);
-      } catch (err) {
-        if (err.status) {
-          return res.status(err.status).json({ message: err.message });
+      if (!isLedgerSwapOrder(order)) {
+        try {
+          assertAllocatableOwed(order.customerId, order.toCurrency, payment.amount, paymentId);
+        } catch (err) {
+          if (err.status) {
+            return res.status(err.status).json({ message: err.message });
+          }
+          throw err;
         }
-        throw err;
       }
     } else {
       if (!payment.accountId) {

@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo, type FormEvent } fro
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import SectionCard from "../components/common/SectionCard";
+import { CustomerDepositPoolsSection } from "../components/customerDeposits/CustomerDepositPoolsSection";
 import { Pagination } from "../components/common/Pagination";
 import AlertModal from "../components/common/AlertModal";
 import ConfirmModal from "../components/common/ConfirmModal";
@@ -618,6 +619,8 @@ export default function CustomersPage() {
 
   return (
     <div className="space-y-6">
+      <CustomerDepositPoolsSection variant="compact" />
+
       <SectionCard
         title={t("customers.title")}
         // 我 REMOVED DESCRIPTION UNDER THE TITLE BEING DISPLAYED

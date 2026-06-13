@@ -14,6 +14,12 @@ import {
   getCustomerTradeProfitLoss,
 } from "../services/customerTradeProfitLoss.js";
 import {
+  getCustomerDepositByCurrency,
+  getCustomerDepositTotalsByCurrency,
+  getCustomerDepositTraceEntries,
+} from "../services/customerDepositTotals.js";
+import { buildDepositAccountStatementRows } from "../services/customerDepositAccountStatement.js";
+import {
   applyLedgerAccountTransaction,
   assertAllocatableBalance,
   buildLedgerAccountDescription,
@@ -61,6 +67,42 @@ export const getAllCustomersConvertedBalances = (_req, res, next) => {
 export const getAllCustomersFundingBalancesHandler = (_req, res, next) => {
   try {
     res.json(getAllCustomersFundingBalances());
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getCustomerDepositTotalsByCurrencyHandler = (_req, res, next) => {
+  try {
+    res.json({ currencies: getCustomerDepositTotalsByCurrency() });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getCustomerDepositByCurrencyHandler = (_req, res, next) => {
+  try {
+    res.json(getCustomerDepositByCurrency());
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getCustomerDepositTraceHandler = (req, res, next) => {
+  try {
+    const customerId = parseInt(req.params.id, 10);
+    const { currencyCode } = req.params;
+
+    const customer = db.prepare("SELECT id FROM customers WHERE id = ?;").get(customerId);
+    if (!customer) {
+      return res.status(404).json({ message: "Customer not found" });
+    }
+
+    res.json({
+      customerId,
+      currencyCode,
+      entries: getCustomerDepositTraceEntries(customerId, currencyCode),
+    });
   } catch (error) {
     next(error);
   }
@@ -508,6 +550,21 @@ export const getAccountStatement = (req, res, next) => {
       activity,
       includeReversals,
     });
+    res.json(rows);
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getDepositAccountStatement = (req, res, next) => {
+  try {
+    const customerId = parseInt(req.params.id, 10);
+    const customer = db.prepare("SELECT id FROM customers WHERE id = ?;").get(customerId);
+    if (!customer) {
+      return res.status(404).json({ message: "Customer not found" });
+    }
+    const includeReversals = req.query.includeReversals === "true";
+    const rows = buildDepositAccountStatementRows(customerId, { includeReversals });
     res.json(rows);
   } catch (error) {
     next(error);

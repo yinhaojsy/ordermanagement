@@ -2,8 +2,6 @@ import type { OrderStatus } from "../types";
 
 export type DatePreset = 'all' | 'currentWeek' | 'lastWeek' | 'currentMonth' | 'lastMonth' | 'custom';
 
-export type OrderAccountFilterRole = 'any' | 'buy' | 'sell';
-
 export interface OrderFilters {
   datePreset: DatePreset;
   dateFrom: string | null;
@@ -11,8 +9,8 @@ export interface OrderFilters {
   handlerId: number | null;
   customerId: number | null;
   currencyPairs: string[];
-  accountId: number | null;
-  accountRole: OrderAccountFilterRole;
+  /** Keyword search against buy/sell/profit/service-charge account names (and COF when matched). */
+  accountSearch: string;
   status: OrderStatus | null;
   tagIds: number[];
 }
@@ -23,8 +21,7 @@ export interface OrderQueryParams {
   handlerId?: number;
   customerId?: number;
   currencyPairs?: string;
-  accountId?: number;
-  accountRole?: OrderAccountFilterRole;
+  accountSearch?: string;
   status?: OrderStatus;
   tagIds?: string;
   page?: number;

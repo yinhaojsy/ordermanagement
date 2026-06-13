@@ -92,13 +92,21 @@ export default function ProfitSummaryDisplay({
 
       {/* Totals */}
       <div className="border-t-2 border-slate-300 pt-4 mt-4">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="p-4 border border-slate-200 rounded-lg bg-blue-50">
             <div className="text-sm font-semibold text-slate-700 mb-1">
               {t("profit.totalConverted") || "Total Converted"}
             </div>
             <div className="text-2xl font-bold text-blue-700">
               {formatCurrency(summary.totalConverted, summary.targetCurrency)}
+            </div>
+          </div>
+          <div className="p-4 border border-slate-200 rounded-lg bg-indigo-50">
+            <div className="text-sm font-semibold text-slate-700 mb-1">
+              {t("profit.totalCustomerDeposit") || "Customer Deposits"}
+            </div>
+            <div className="text-2xl font-bold text-indigo-800">
+              {formatCurrency(summary.totalCustomerDepositConverted, summary.targetCurrency)}
             </div>
           </div>
           <div className="p-4 border border-slate-200 rounded-lg bg-slate-50">

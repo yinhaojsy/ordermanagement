@@ -82,6 +82,8 @@ export function tagsFromCacheSyncPayload(payload: CacheSyncPayload): AnyInvalida
       case "customerLedger":
         tags.push({ type: "CustomerLedger", id: "CONVERTED-BALANCES" });
         tags.push({ type: "CustomerLedger", id: "FUNDING-CONVERTED-BALANCES" });
+        tags.push({ type: "CustomerLedger", id: "DEPOSIT-TOTALS" });
+        tags.push({ type: "CustomerLedger", id: "DEPOSIT-BY-CURRENCY" });
         tags.push({ type: "Customer", id: "LIST" });
         if (customerId != null && Number.isFinite(Number(customerId))) {
           const cid = Number(customerId);

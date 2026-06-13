@@ -13,6 +13,7 @@ import { OrdersFilters } from "../components/orders/OrdersFilters";
 import { OrdersTable } from "../components/orders/OrdersTable";
 import { OrdersColumnDropdown } from "../components/orders/OrdersColumnDropdown";
 import { CreateCustomerModal } from "../components/orders/CreateCustomerModal";
+import { CustomerLedgerEntryFormModal } from "../components/customers/CustomerLedgerEntryFormModal";
 import { ImportOrdersModal } from "../components/orders/ImportOrdersModal";
 import { ProfitServiceChargeSection } from "../components/orders/ProfitServiceChargeSection";
 import { ViewOrderModal } from "../components/orders/ViewOrderModal";
@@ -64,6 +65,7 @@ import {
 } from "../services/api";
 import { useAppSelector } from "../app/hooks";
 import { hasActionPermission } from "../utils/permissions";
+import { canCreateLedgerDepositWithdraw } from "../utils/customerPermissions";
 import type { Order } from "../types";
 import { formatDate } from "../utils/format";
 
@@ -157,8 +159,19 @@ export default function OrdersPage() {
     type: "image" | "pdf";
     title: string;
   } | null>(null);
+  const [ledgerEntryModal, setLedgerEntryModal] = useState<{
+    open: boolean;
+    type: "credit" | "debit";
+  }>({ open: false, type: "credit" });
 
   const unifiedOrder = useUnifiedOrderModal(currencies, accounts, authUser, customers);
+  const canDepositWithdraw = canCreateLedgerDepositWithdraw(authUser);
+
+  useEffect(() => {
+    if (!unifiedOrder.isOpen) {
+      setLedgerEntryModal({ open: false, type: "credit" });
+    }
+  }, [unifiedOrder.isOpen]);
 
   // Get unique currency pairs from all orders (for dropdown)
   // Note: This would ideally come from the backend, but for now we'll generate from currencies
@@ -1436,7 +1449,6 @@ export default function OrdersPage() {
               onTagFilterKeyDown={handleTagFilterKeyDown}
               users={users}
               customers={customers}
-              accounts={accounts}
               currencyPairs={currencyPairs}
               tags={tags}
               selectedTagNames={selectedTagNames}
@@ -1561,12 +1573,34 @@ export default function OrdersPage() {
         advanceBalance={unifiedOrder.advanceBalance}
         fundingSummary={unifiedOrder.fundingSummary}
         fundingSummaryLoading={unifiedOrder.fundingSummaryLoading}
+        orderMode={unifiedOrder.orderMode}
+        setOrderMode={unifiedOrder.setOrderMode}
+        isLedgerSwap={unifiedOrder.isLedgerSwap}
         selectedCustomerId={unifiedOrder.selectedCustomerId}
         addLineRow={unifiedOrder.addLineRow}
         addPresetServiceCharge={unifiedOrder.addPresetServiceCharge}
         viewerModal={newOrderViewerModal}
         setViewerModal={setNewOrderViewerModal}
+        canDepositWithdraw={canDepositWithdraw}
+        onOpenLedgerEntry={() => setLedgerEntryModal({ open: true, type: "credit" })}
       />
+
+      {ledgerEntryModal.open && unifiedOrder.selectedCustomerId ? (
+        <CustomerLedgerEntryFormModal
+          key={`${unifiedOrder.selectedCustomerId}-${ledgerEntryModal.type}`}
+          customerId={unifiedOrder.selectedCustomerId}
+          initialType={ledgerEntryModal.type}
+          defaultCurrencyCode={
+            ledgerEntryModal.type === "credit"
+              ? unifiedOrder.fromCurrency
+              : unifiedOrder.toCurrency
+          }
+          currencies={currencies}
+          overlayClassName="z-[8100]"
+          onClose={() => setLedgerEntryModal({ open: false, type: "credit" })}
+          onError={(msg) => setAlertModal({ isOpen: true, message: msg, type: "error" })}
+        />
+      ) : null}
 
       {/* Create Customer Modal */}
       <CreateCustomerModal

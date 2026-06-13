@@ -51,7 +51,11 @@ import {
   getLedgerEntryChanges,
   getAllCustomersConvertedBalances,
   getAllCustomersFundingBalancesHandler,
+  getCustomerDepositTotalsByCurrencyHandler,
+  getCustomerDepositByCurrencyHandler,
+  getCustomerDepositTraceHandler,
   getAccountStatement,
+  getDepositAccountStatement,
   rebuildLedgerFromOrders,
   getCustomerLedgerBalance,
   getCustomerFundingBalancesHandler,
@@ -145,6 +149,7 @@ import {
   deleteProfitCalculation,
   updateAccountMultiplier,
   updateExchangeRate,
+  updateDepositExchangeRate,
   deleteGroup,
   renameGroup,
   setDefaultCalculation,
@@ -361,6 +366,21 @@ protectedRouter.delete(
 
 protectedRouter.get("/customers/ledger/converted-balances", section("customers"), customerLedgerRead, getAllCustomersConvertedBalances);
 protectedRouter.get("/customers/ledger/funding-converted-balances", section("customers"), customerLedgerRead, getAllCustomersFundingBalancesHandler);
+protectedRouter.get(
+  "/customers/ledger/deposit-totals-by-currency",
+  anySection("profit", "accounts", "dashboard", "customers"),
+  getCustomerDepositTotalsByCurrencyHandler,
+);
+protectedRouter.get(
+  "/customers/ledger/deposit-by-currency",
+  anySection("profit", "accounts", "dashboard", "customers"),
+  getCustomerDepositByCurrencyHandler,
+);
+protectedRouter.get(
+  "/customers/:id/ledger/deposit-trace/:currencyCode",
+  anySection("profit", "accounts", "dashboard", "customers"),
+  getCustomerDepositTraceHandler,
+);
 protectedRouter.get("/customers/:id/ledger", section("customers"), customerLedgerRead, listLedgerEntries);
 protectedRouter.get("/customers/:id/ledger/summary", section("customers"), customerLedgerRead, getLedgerSummary);
 protectedRouter.get("/customers/:id/ledger/balance/:currencyCode", section("customers"), customerLedgerRead, getCustomerLedgerBalance);
@@ -368,6 +388,7 @@ protectedRouter.get("/customers/:id/ledger/funding-balances", section("customers
 protectedRouter.get("/customers/:id/ledger/trade-profit-loss", section("customers"), customerLedgerRead, getCustomerTradeProfitLossHandler);
 protectedRouter.get("/customers/:id/ledger/funding-summary", section("customers"), customerLedgerRead, getCustomerFundingSummaryHandler);
 protectedRouter.get("/customers/:id/ledger/account-statement", section("customers"), customerLedgerRead, getAccountStatement);
+protectedRouter.get("/customers/:id/ledger/deposit-account-statement", section("customers"), customerLedgerRead, getDepositAccountStatement);
 protectedRouter.post(
   "/customers/:id/ledger/rebuild-from-orders",
   section("customers"),
@@ -465,6 +486,7 @@ protectedRouter.put("/profit-calculations/:id", section("profit"), updateProfitC
 protectedRouter.delete("/profit-calculations/:id", section("profit"), deleteProfitCalculation);
 protectedRouter.put("/profit-calculations/:id/multipliers/:accountId", section("profit"), updateAccountMultiplier);
 protectedRouter.put("/profit-calculations/:id/exchange-rates", section("profit"), updateExchangeRate);
+protectedRouter.put("/profit-calculations/:id/deposit-exchange-rates", section("profit"), updateDepositExchangeRate);
 protectedRouter.delete("/profit-calculations/:id/groups", section("profit"), deleteGroup);
 protectedRouter.put("/profit-calculations/:id/groups", section("profit"), renameGroup);
 protectedRouter.put("/profit-calculations/:id/set-default", section("profit"), setDefaultCalculation);

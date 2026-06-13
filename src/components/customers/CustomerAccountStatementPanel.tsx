@@ -204,7 +204,7 @@ export function CustomerAccountStatementPanel({
 
     const ws = XLSX.utils.json_to_sheet(sheetRows);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, t("customerLedger.accountStatement"));
+    XLSX.utils.book_append_sheet(wb, ws, t("customerLedger.tradeRecord"));
     const balanceRows = (summary as CustomerLedgerSummary[]).map((s) => ({
       Currency: s.currencyCode,
       Balance: s.balance,
@@ -286,7 +286,7 @@ export function CustomerAccountStatementPanel({
   return (
     <>
       <SectionCard
-        title={t("customerLedger.accountStatement")}
+        title={t("customerLedger.tradeRecord")}
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <button

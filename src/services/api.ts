@@ -30,6 +30,9 @@ import type {
   ExpenseChange,
   ProfitCalculation,
   ProfitCalculationDetails,
+  CustomerDepositTotalsResponse,
+  CustomerDepositByCurrencyResponse,
+  CustomerDepositTraceEntry,
   ProfitAccountMultiplier,
   ProfitExchangeRate,
   Tag,
@@ -45,6 +48,7 @@ import type {
   CustomerLedgerBalanceInfo,
   ReceiptFundedFrom,
   CustomerAccountStatementRow,
+  CustomerDepositStatementRow,
   AccountStatementActivityFilter,
   AllCustomersConvertedBalances,
   AllCustomersFundingConverted,
@@ -426,6 +430,20 @@ export const api = createApi({
         { type: "CustomerLedger" as const, id: `ACCOUNT-STATEMENT-${customerId}` },
       ],
     }),
+    getCustomerDepositAccountStatement: builder.query<
+      CustomerDepositStatementRow[],
+      { customerId: number; includeReversals?: boolean }
+    >({
+      query: ({ customerId, includeReversals = false }) => {
+        const params = new URLSearchParams();
+        if (includeReversals) params.set("includeReversals", "true");
+        const qs = params.toString();
+        return `customers/${customerId}/ledger/deposit-account-statement${qs ? `?${qs}` : ""}`;
+      },
+      providesTags: (_res, _err, { customerId }) => [
+        { type: "CustomerLedger" as const, id: `DEPOSIT-STATEMENT-${customerId}` },
+      ],
+    }),
     rebuildCustomerLedgerFromOrders: builder.mutation<{ ordersProcessed: number }, number>({
       query: (customerId) => ({
         url: `customers/${customerId}/ledger/rebuild-from-orders`,
@@ -438,6 +456,7 @@ export const api = createApi({
         { type: "CustomerLedger", id: `FUNDING-SUMMARY-${customerId}` },
         { type: "CustomerLedger", id: `TRADE-PROFIT-${customerId}` },
         { type: "CustomerLedger", id: `ACCOUNT-STATEMENT-${customerId}` },
+        { type: "CustomerLedger", id: `DEPOSIT-STATEMENT-${customerId}` },
         { type: "CustomerLedger", id: "CONVERTED-BALANCES" },
         { type: "CustomerLedger", id: "FUNDING-CONVERTED-BALANCES" },
       ],
@@ -455,6 +474,7 @@ export const api = createApi({
         { type: "CustomerLedger", id: `FUNDING-SUMMARY-${customerId}` },
         { type: "CustomerLedger", id: `TRADE-PROFIT-${customerId}` },
         { type: "CustomerLedger", id: `ACCOUNT-STATEMENT-${customerId}` },
+        { type: "CustomerLedger", id: `DEPOSIT-STATEMENT-${customerId}` },
         { type: "CustomerLedger", id: "CONVERTED-BALANCES" },
         { type: "CustomerLedger", id: "FUNDING-CONVERTED-BALANCES" },
         { type: "Account", id: "LIST" },
@@ -477,6 +497,7 @@ export const api = createApi({
         { type: "CustomerLedger", id: `FUNDING-SUMMARY-${customerId}` },
         { type: "CustomerLedger", id: `TRADE-PROFIT-${customerId}` },
         { type: "CustomerLedger", id: `ACCOUNT-STATEMENT-${customerId}` },
+        { type: "CustomerLedger", id: `DEPOSIT-STATEMENT-${customerId}` },
         { type: "CustomerLedger", id: entryId },
         { type: "CustomerLedger", id: "CONVERTED-BALANCES" },
         { type: "CustomerLedger", id: "FUNDING-CONVERTED-BALANCES" },
@@ -496,6 +517,7 @@ export const api = createApi({
         { type: "CustomerLedger", id: `FUNDING-SUMMARY-${customerId}` },
         { type: "CustomerLedger", id: `TRADE-PROFIT-${customerId}` },
         { type: "CustomerLedger", id: `ACCOUNT-STATEMENT-${customerId}` },
+        { type: "CustomerLedger", id: `DEPOSIT-STATEMENT-${customerId}` },
         { type: "CustomerLedger", id: "CONVERTED-BALANCES" },
         { type: "CustomerLedger", id: "FUNDING-CONVERTED-BALANCES" },
         { type: "Account", id: "LIST" },
@@ -831,8 +853,7 @@ export const api = createApi({
         handlerId?: number;
         customerId?: number;
         currencyPairs?: string;
-        accountId?: number;
-        accountRole?: "any" | "buy" | "sell";
+        accountSearch?: string;
         status?: OrderStatus;
         orderType?: "online" | "otc";
         tagIds?: string;
@@ -847,10 +868,7 @@ export const api = createApi({
         if (params.handlerId !== undefined) queryParams.append("handlerId", params.handlerId.toString());
         if (params.customerId !== undefined) queryParams.append("customerId", params.customerId.toString());
         if (params.currencyPairs) queryParams.append("currencyPairs", params.currencyPairs);
-        if (params.accountId !== undefined) queryParams.append("accountId", params.accountId.toString());
-        if (params.accountRole && params.accountRole !== "any") {
-          queryParams.append("accountRole", params.accountRole);
-        }
+        if (params.accountSearch) queryParams.append("accountSearch", params.accountSearch);
         if (params.status) queryParams.append("status", params.status);
         if (params.orderType) queryParams.append("orderType", params.orderType);
         if (params.tagIds) queryParams.append("tagIds", params.tagIds);
@@ -875,8 +893,7 @@ export const api = createApi({
         handlerId?: number;
         customerId?: number;
         currencyPairs?: string;
-        accountId?: number;
-        accountRole?: "any" | "buy" | "sell";
+        accountSearch?: string;
         status?: OrderStatus;
         orderType?: "online" | "otc";
         tagIds?: string;
@@ -889,10 +906,7 @@ export const api = createApi({
         if (params.handlerId !== undefined) queryParams.append("handlerId", params.handlerId.toString());
         if (params.customerId !== undefined) queryParams.append("customerId", params.customerId.toString());
         if (params.currencyPairs) queryParams.append("currencyPairs", params.currencyPairs);
-        if (params.accountId !== undefined) queryParams.append("accountId", params.accountId.toString());
-        if (params.accountRole && params.accountRole !== "any") {
-          queryParams.append("accountRole", params.accountRole);
-        }
+        if (params.accountSearch) queryParams.append("accountSearch", params.accountSearch);
         if (params.status) queryParams.append("status", params.status);
         if (params.orderType) queryParams.append("orderType", params.orderType);
         if (params.tagIds) queryParams.append("tagIds", params.tagIds);
@@ -1850,9 +1864,35 @@ export const api = createApi({
       }),
       invalidatesTags: [{ type: "ProfitCalculation", id: "LIST" }],
     }),
+    getCustomerDepositTotalsByCurrency: builder.query<CustomerDepositTotalsResponse, void>({
+      query: () => "customers/ledger/deposit-totals-by-currency",
+      providesTags: [{ type: "CustomerLedger", id: "DEPOSIT-TOTALS" }],
+    }),
+    getCustomerDepositByCurrency: builder.query<CustomerDepositByCurrencyResponse, void>({
+      query: () => "customers/ledger/deposit-by-currency",
+      providesTags: [{ type: "CustomerLedger", id: "DEPOSIT-BY-CURRENCY" }],
+    }),
+    getCustomerDepositTrace: builder.query<
+      { customerId: number; currencyCode: string; entries: CustomerDepositTraceEntry[] },
+      { customerId: number; currencyCode: string }
+    >({
+      query: ({ customerId, currencyCode }) =>
+        `customers/${customerId}/ledger/deposit-trace/${encodeURIComponent(currencyCode)}`,
+      providesTags: (_res, _err, { customerId, currencyCode }) => [
+        { type: "CustomerLedger", id: `DEPOSIT-TRACE-${customerId}-${currencyCode}` },
+      ],
+    }),
     updateProfitCalculation: builder.mutation<
       ProfitCalculation,
-      { id: number; data: Partial<Pick<ProfitCalculation, "name" | "targetCurrencyCode" | "initialInvestment" | "groups">> }
+      {
+        id: number;
+        data: Partial<
+          Pick<
+            ProfitCalculation,
+            "name" | "targetCurrencyCode" | "initialInvestment" | "groups" | "useLinkedDepositExchangeRates"
+          >
+        >;
+      }
     >({
       query: ({ id, data }) => ({
         url: `profit-calculations/${id}`,
@@ -1894,6 +1934,19 @@ export const api = createApi({
     >({
       query: ({ calculationId, ...body }) => ({
         url: `profit-calculations/${calculationId}/exchange-rates`,
+        method: "PUT",
+        body,
+      }),
+      invalidatesTags: (_res, _err, { calculationId }) => [
+        { type: "ProfitCalculation", id: calculationId },
+      ],
+    }),
+    updateDepositExchangeRate: builder.mutation<
+      ProfitExchangeRate,
+      { calculationId: number; fromCurrencyCode: string; toCurrencyCode: string; rate: number }
+    >({
+      query: ({ calculationId, ...body }) => ({
+        url: `profit-calculations/${calculationId}/deposit-exchange-rates`,
         method: "PUT",
         body,
       }),
@@ -2578,6 +2631,10 @@ export const {
   useDeleteProfitCalculationMutation,
   useUpdateAccountMultiplierMutation,
   useUpdateExchangeRateMutation,
+  useUpdateDepositExchangeRateMutation,
+  useGetCustomerDepositTotalsByCurrencyQuery,
+  useGetCustomerDepositByCurrencyQuery,
+  useGetCustomerDepositTraceQuery,
   useDeleteGroupMutation,
   useRenameGroupMutation,
   useSetDefaultProfitCalculationMutation,
@@ -2629,6 +2686,7 @@ export const {
   useGetCustomerFundingBalancesQuery,
   useGetCustomerLedgerBalanceQuery,
   useGetCustomerAccountStatementQuery,
+  useGetCustomerDepositAccountStatementQuery,
   useRebuildCustomerLedgerFromOrdersMutation,
   useCreateLedgerEntryMutation,
   useUpdateLedgerEntryMutation,

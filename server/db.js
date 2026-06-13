@@ -509,6 +509,21 @@ const ensureSchema = () => {
   ).run();
 
   db.prepare(
+    `CREATE TABLE IF NOT EXISTS profit_deposit_exchange_rates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      profitCalculationId INTEGER NOT NULL,
+      fromCurrencyCode TEXT NOT NULL,
+      toCurrencyCode TEXT NOT NULL,
+      rate REAL NOT NULL,
+      createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(profitCalculationId) REFERENCES profit_calculations(id) ON DELETE CASCADE,
+      FOREIGN KEY(fromCurrencyCode) REFERENCES currencies(code),
+      FOREIGN KEY(toCurrencyCode) REFERENCES currencies(code),
+      UNIQUE(profitCalculationId, fromCurrencyCode, toCurrencyCode)
+    );`,
+  ).run();
+
+  db.prepare(
     `CREATE TABLE IF NOT EXISTS settings (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       key TEXT UNIQUE NOT NULL,
@@ -1241,6 +1256,9 @@ const migrateDatabase = () => {
     if (!columnNames.includes("orderDate")) {
       db.prepare("ALTER TABLE orders ADD COLUMN orderDate TEXT").run();
     }
+    if (!columnNames.includes("orderMode")) {
+      db.prepare("ALTER TABLE orders ADD COLUMN orderMode TEXT NOT NULL DEFAULT 'exchange'").run();
+    }
 
     // Best-effort: older rows had NULL createdBy; copy handler user when present so "Created by" can resolve.
     const ordersColNames = db.prepare("PRAGMA table_info(orders)").all().map((col) => col.name);
@@ -1356,6 +1374,12 @@ const migrateDatabase = () => {
     // Check profit_calculations table for isDefault column
     if (!profitCalcColumnNames.includes("isDefault")) {
       db.prepare("ALTER TABLE profit_calculations ADD COLUMN isDefault INTEGER NOT NULL DEFAULT 0").run();
+    }
+
+    if (!profitCalcColumnNames.includes("useLinkedDepositExchangeRates")) {
+      db.prepare(
+        "ALTER TABLE profit_calculations ADD COLUMN useLinkedDepositExchangeRates INTEGER NOT NULL DEFAULT 1",
+      ).run();
     }
 
     const currencyTableInfo = db.prepare("PRAGMA table_info(currencies)").all();

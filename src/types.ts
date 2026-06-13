@@ -236,8 +236,8 @@ export interface Order {
   sellAccountId?: number;
   buyAccountName?: string;
   sellAccountName?: string;
-  buyAccounts?: Array<{ accountId: number; accountName: string; amount: number }>;
-  sellAccounts?: Array<{ accountId: number; accountName: string; amount: number }>;
+  buyAccounts?: Array<{ accountId: number | null; accountName: string; amount: number; isCof?: boolean }>;
+  sellAccounts?: Array<{ accountId: number | null; accountName: string; amount: number; isCof?: boolean }>;
   paymentFlow?: PaymentFlow;
   actualAmountBuy?: number;
   actualAmountSell?: number;
@@ -253,6 +253,8 @@ export interface Order {
   calculatedProfit?: number | null;
   calculatedProfitCurrency?: string | null;
   orderType?: "online" | "otc";
+  /** exchange = normal cash/Bal order; ledger_swap = customer deposit currency swap (no company accounts) */
+  orderMode?: "exchange" | "ledger_swap";
   tags?: Tag[];
   remarks?: string;
   createdAt: string;
@@ -362,6 +364,7 @@ export interface OrderInput {
   profitCurrency?: string | null;
   profitAccountId?: number | null;
   orderType?: "online" | "otc";
+  orderMode?: "exchange" | "ledger_swap";
   handlerId?: number;
   tagIds?: number[];
   remarks?: string;
@@ -502,6 +505,7 @@ export interface ProfitCalculation {
   initialInvestment: number;
   groups?: string[];
   isDefault?: number | boolean;
+  useLinkedDepositExchangeRates?: number | boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -532,6 +536,54 @@ export interface ProfitExchangeRate {
 export interface ProfitCalculationDetails extends ProfitCalculation {
   multipliers: ProfitAccountMultiplier[];
   exchangeRates: ProfitExchangeRate[];
+  depositExchangeRates: ProfitExchangeRate[];
+}
+
+export interface CustomerDepositTotalByCurrency {
+  currencyCode: string;
+  totalFundedBalance: number;
+  totalPrepaid?: number;
+  totalAdvance?: number;
+}
+
+export interface CustomerDepositTotalsResponse {
+  currencies: CustomerDepositTotalByCurrency[];
+}
+
+export interface CustomerDepositCustomerRow {
+  customerId: number;
+  customerName: string;
+  fundedBalance: number;
+  allocatable: number;
+  allocatableAdvance: number;
+}
+
+export interface CustomerDepositCurrencyRow {
+  currencyCode: string;
+  totalFundedBalance: number;
+  totalPrepaid?: number;
+  totalAdvance?: number;
+  customers: CustomerDepositCustomerRow[];
+}
+
+export interface CustomerDepositByCurrencyResponse {
+  targetCurrency: string | null;
+  totalConverted: number | null;
+  totalPrepaidConverted?: number | null;
+  totalAdvanceConverted?: number | null;
+  hasUnknownRate: boolean;
+  currencies: CustomerDepositCurrencyRow[];
+}
+
+export interface CustomerDepositTraceEntry {
+  id: number;
+  type: "credit" | "debit";
+  amount: number;
+  description?: string | null;
+  entryDate?: string | null;
+  createdAt: string;
+  accountId?: number | null;
+  accountName?: string | null;
 }
 
 export interface CustomerLedgerEntry {
@@ -599,6 +651,38 @@ export interface CustomerAccountStatementFundingRow extends CustomerAccountState
 export type CustomerAccountStatementRow =
   | CustomerAccountStatementTradeRow
   | CustomerAccountStatementFundingRow;
+
+export interface FundingEffect {
+  currencyCode: string;
+  delta: number;
+}
+
+/** Enriched row for bank-style deposit account statement (running funding balance). */
+export interface CustomerDepositStatementFundingRow extends CustomerAccountStatementFundingRow {
+  fundingEffects: FundingEffect[];
+  usesDeposit: boolean;
+  prepaidUsed: null;
+  depositCredited: null;
+  serviceChargeFromDeposit: [];
+  orderMode: null;
+}
+
+export interface CustomerDepositStatementTradeRow extends CustomerAccountStatementTradeRow {
+  orderMode: "exchange" | "ledger_swap";
+  prepaidUsed: { amount: number; currency: string } | null;
+  depositCredited: { amount: number; currency: string } | null;
+  serviceChargeFromDeposit: { amount: number; currency: string }[];
+  fundingEffects: FundingEffect[];
+  usesDeposit: boolean;
+}
+
+export type CustomerDepositStatementRow =
+  | CustomerDepositStatementFundingRow
+  | CustomerDepositStatementTradeRow;
+
+export type CustomerDepositStatementRowWithBalance = CustomerDepositStatementRow & {
+  runningBalances: Record<string, number>;
+};
 
 export interface CustomerLedgerEntryInput {
   customerId: number;

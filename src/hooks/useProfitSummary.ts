@@ -1,6 +1,16 @@
 import { useMemo } from "react";
-import type { Account, Currency, ProfitCalculationDetails, ProfitAccountMultiplier } from "../types";
+import type {
+  Account,
+  Currency,
+  CustomerDepositTotalByCurrency,
+  ProfitCalculationDetails,
+  ProfitAccountMultiplier,
+} from "../types";
 import { convertCurrency } from "../utils/orders/orderCalculations";
+import {
+  buildDepositExchangeRateMap,
+  computeCustomerDepositConverted,
+} from "../utils/profit/customerDepositConversion";
 
 export interface ProfitSummaryData {
   groupSums: Map<string, Map<string, number>>;
@@ -8,6 +18,7 @@ export interface ProfitSummaryData {
   groupConvertedTotals: Map<string, number>;
   groupAccountCounts: Map<string, number>;
   totalConverted: number;
+  totalCustomerDepositConverted: number;
   totalInvestment: number;
   totalProfit: number;
   targetCurrency: string;
@@ -17,7 +28,8 @@ export interface ProfitSummaryData {
 export function useProfitSummary(
   calculationDetails: ProfitCalculationDetails | undefined,
   accounts: Account[],
-  currencies: Currency[] = []
+  currencies: Currency[] = [],
+  customerDepositTotals: CustomerDepositTotalByCurrency[] = [],
 ): ProfitSummaryData | null {
   return useMemo(() => {
     if (!calculationDetails) return null;
@@ -32,7 +44,20 @@ export function useProfitSummary(
       defaultExchangeRateMap.set(`${er.fromCurrencyCode}_${er.toCurrencyCode}`, er.rate);
     });
 
-    // Calculate account values
+    const useLinkedDepositRates =
+      calculationDetails.useLinkedDepositExchangeRates === undefined ||
+      calculationDetails.useLinkedDepositExchangeRates === null
+        ? true
+        : calculationDetails.useLinkedDepositExchangeRates === true ||
+          calculationDetails.useLinkedDepositExchangeRates === 1;
+
+    const depositRateMap = buildDepositExchangeRateMap(
+      calculationDetails.targetCurrencyCode,
+      defaultExchangeRateMap,
+      calculationDetails.depositExchangeRates ?? [],
+      useLinkedDepositRates,
+    );
+
     const accountCalcs = accounts.map((account) => {
       const multiplier = defaultMultiplierMap.get(account.id);
       const mult = multiplier?.multiplier ?? 1.0;
@@ -46,7 +71,6 @@ export function useProfitSummary(
       };
     });
 
-    // Group accounts by groupId
     const grouped = new Map<string, typeof accountCalcs>();
     accountCalcs.forEach((calc) => {
       const groupId = calc.groupId || "ungrouped";
@@ -56,10 +80,8 @@ export function useProfitSummary(
       grouped.get(groupId)!.push(calc);
     });
 
-    // Calculate group sums by currency
     const groupSums = new Map<string, Map<string, number>>();
     grouped.forEach((groupAccounts, groupId) => {
-      // Exclude "ungrouped" accounts from group sums - only include assigned groups
       if (groupId !== "ungrouped") {
         const currencySums = new Map<string, number>();
         groupAccounts.forEach((calc) => {
@@ -70,33 +92,45 @@ export function useProfitSummary(
       }
     });
 
-    // Calculate converted amounts
     const convertedAmounts = new Map<string, number>();
-    // Only include currencies from accounts that are assigned to groups (exclude ungrouped)
     const uniqueCurrencies = Array.from(
       new Set(
         accountCalcs
-          .filter((calc) => calc.groupId) // Only include accounts with a groupId
-          .map((calc) => calc.account.currencyCode)
-      )
+          .filter((calc) => calc.groupId)
+          .map((calc) => calc.account.currencyCode),
+      ),
     );
     uniqueCurrencies.forEach((currency) => {
       const key = `${currency}_${calculationDetails.targetCurrencyCode}`;
       const defaultRate = currency === calculationDetails.targetCurrencyCode ? 1 : 0;
       const rate = defaultExchangeRateMap.get(key) || defaultRate;
-      const currencySum = Array.from(groupSums.values())
-        .reduce((sum, currencySums) => sum + (currencySums.get(currency) || 0), 0);
-      const converted = rate > 0
-        ? convertCurrency(currencySum, rate, currency, calculationDetails.targetCurrencyCode, currencies)
-        : currencySum;
+      const currencySum = Array.from(groupSums.values()).reduce(
+        (sum, currencySums) => sum + (currencySums.get(currency) || 0),
+        0,
+      );
+      const converted =
+        rate > 0
+          ? convertCurrency(
+              currencySum,
+              rate,
+              currency,
+              calculationDetails.targetCurrencyCode,
+              currencies,
+            )
+          : currencySum;
       convertedAmounts.set(currency, converted);
     });
 
     const totalConverted = Array.from(convertedAmounts.values()).reduce((sum, val) => sum + val, 0);
+    const totalCustomerDepositConverted = computeCustomerDepositConverted(
+      customerDepositTotals,
+      calculationDetails.targetCurrencyCode,
+      depositRateMap,
+      currencies,
+    );
     const totalInvestment = calculationDetails.initialInvestment || 0;
-    const totalProfit = totalConverted - totalInvestment;
+    const totalProfit = totalConverted - totalCustomerDepositConverted - totalInvestment;
 
-    // Get group names for display
     const groupNames = new Map<string, string>();
     grouped.forEach((_, groupId) => {
       if (groupId !== "ungrouped") {
@@ -107,7 +141,6 @@ export function useProfitSummary(
       }
     });
 
-    // Calculate converted total for each group
     const groupConvertedTotals = new Map<string, number>();
     groupSums.forEach((currencySums, groupId) => {
       let groupTotal = 0;
@@ -115,15 +148,15 @@ export function useProfitSummary(
         const key = `${currency}_${calculationDetails.targetCurrencyCode}`;
         const defaultRate = currency === calculationDetails.targetCurrencyCode ? 1 : 0;
         const rate = defaultExchangeRateMap.get(key) || defaultRate;
-        const converted = rate > 0
-          ? convertCurrency(sum, rate, currency, calculationDetails.targetCurrencyCode, currencies)
-          : sum;
+        const converted =
+          rate > 0
+            ? convertCurrency(sum, rate, currency, calculationDetails.targetCurrencyCode, currencies)
+            : sum;
         groupTotal += converted;
       });
       groupConvertedTotals.set(groupId, groupTotal);
     });
 
-    // Calculate account counts per group
     const groupAccountCounts = new Map<string, number>();
     grouped.forEach((groupAccounts, groupId) => {
       groupAccountCounts.set(groupId, groupAccounts.length);
@@ -135,11 +168,11 @@ export function useProfitSummary(
       groupConvertedTotals,
       groupAccountCounts,
       totalConverted,
+      totalCustomerDepositConverted,
       totalInvestment,
       totalProfit,
       targetCurrency: calculationDetails.targetCurrencyCode,
       exchangeRateMap: defaultExchangeRateMap,
     };
-  }, [calculationDetails, accounts, currencies]);
+  }, [calculationDetails, accounts, currencies, customerDepositTotals]);
 }
-

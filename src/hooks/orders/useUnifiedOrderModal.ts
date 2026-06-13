@@ -21,8 +21,14 @@ import {
 } from "../../services/api";
 import type { Account, AuthResponse, Currency, ReceiptFundedFrom, Tag } from "../../types";
 import { ORDER_RECEIPT_PAYMENT_TOLERANCE } from "../../utils/orders/orderAmountTolerance";
+import {
+  orderUsesCustomerFunding,
+  validateCofBalancesBeforeComplete,
+} from "../../utils/orders/cofBalanceValidation";
 
 export type UnifiedLineKind = "receipt" | "payment" | "profit" | "service_charge";
+
+export type OrderModalMode = "exchange" | "ledger_swap";
 
 export type ResolvedServiceChargeLine = {
   amount: number;
@@ -47,16 +53,30 @@ export type UnifiedLine = {
   serviceChargeCurrency?: string;
 };
 
-function newLine(kind: UnifiedLineKind): UnifiedLine {
+function newLine(kind: UnifiedLineKind, orderMode: OrderModalMode = "exchange"): UnifiedLine {
+  const fundedFrom: ReceiptFundedFrom | undefined =
+    kind === "receipt" || kind === "payment" || kind === "service_charge"
+      ? orderMode === "ledger_swap" && (kind === "receipt" || kind === "payment")
+        ? "customer_balance"
+        : "cash"
+      : undefined;
   return {
     localId: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
     kind,
     amount: "",
     accountId: "",
-    fundedFrom: kind === "receipt" || kind === "payment" || kind === "service_charge" ? "cash" : undefined,
+    fundedFrom,
     file: null,
     ...(kind === "service_charge" ? { serviceChargeMode: "fixed" as const, serviceChargePercent: "", serviceChargeCurrency: "" } : {}),
   };
+}
+
+function applyOrderModeToLine(line: UnifiedLine, orderMode: OrderModalMode): UnifiedLine {
+  if (orderMode !== "ledger_swap") return line;
+  if (line.kind === "receipt" || line.kind === "payment") {
+    return { ...line, fundedFrom: "customer_balance", accountId: "" };
+  }
+  return line;
 }
 
 function toDatetimeLocal(date: Date): string {
@@ -92,6 +112,8 @@ export function useUnifiedOrderModal(
   const [selectedTagIds, setSelectedTagIds] = useState<number[]>([]);
   const [showTagPicker, setShowTagPicker] = useState(false);
   const [orderDate, setOrderDate] = useState(() => toDatetimeLocal(new Date()));
+  const [orderMode, setOrderMode] = useState<OrderModalMode>("exchange");
+  const isLedgerSwap = orderMode === "ledger_swap";
   const amountsRef = useRef({ amountBuy, amountSell, rate, fromCurrency, toCurrency });
   amountsRef.current = { amountBuy, amountSell, rate, fromCurrency, toCurrency };
 
@@ -265,13 +287,18 @@ export function useUnifiedOrderModal(
     const buy = amountBuy.trim();
     const sell = amountSell.trim();
     if (!buy || !sell || Number(buy) <= 0 || Number(sell) <= 0) return;
+    const allocatable = isLedgerSwap ? prepaidBalance?.allocatable : null;
+    let receiptAmount = buy;
+    if (allocatable != null && allocatable > 0 && Number(buy) > allocatable) {
+      receiptAmount = String(allocatable);
+    }
     setLines((prev) => {
       let receiptDone = false;
       let paymentDone = false;
       return prev.map((line) => {
         if (line.kind === "receipt" && !receiptDone) {
           receiptDone = true;
-          return { ...line, amount: buy };
+          return { ...line, amount: receiptAmount };
         }
         if (line.kind === "payment" && !paymentDone) {
           paymentDone = true;
@@ -280,7 +307,7 @@ export function useUnifiedOrderModal(
         return line;
       });
     });
-  }, [amountBuy, amountSell]);
+  }, [amountBuy, amountSell, isLedgerSwap, prepaidBalance?.allocatable]);
 
   const resetForm = useCallback(() => {
     setCustomerName("");
@@ -290,6 +317,7 @@ export function useUnifiedOrderModal(
     setAmountSell("");
     setRate("");
     setHandlerId("");
+    setOrderMode("exchange");
     setLines([newLine("receipt"), newLine("payment")]);
     setRemarks("");
     setShowRemarks(false);
@@ -316,6 +344,7 @@ export function useUnifiedOrderModal(
     setAmountSell(String(order.amountSell));
     setRate(String(order.rate));
     setHandlerId((order as { handlerId?: number | null }).handlerId ? String((order as { handlerId?: number | null }).handlerId) : "");
+    setOrderMode(order.orderMode === "ledger_swap" ? "ledger_swap" : "exchange");
     const nextLines: UnifiedLine[] = [];
     for (const r of orderDetails.receipts || []) {
       nextLines.push({
@@ -386,17 +415,37 @@ export function useUnifiedOrderModal(
     }
   }, [editingOrderId, orderDetails]);
 
-  const addLineRow = useCallback((kind: UnifiedLineKind) => {
-    setLines((prev) => [...prev, newLine(kind)]);
-  }, []);
+  const addLineRow = useCallback(
+    (kind: UnifiedLineKind) => {
+      setLines((prev) => [...prev, newLine(kind, orderMode)]);
+    },
+    [orderMode],
+  );
 
   const addPresetServiceCharge = useCallback((amount: string) => {
     setLines((prev) => [...prev, { ...newLine("service_charge"), amount }]);
   }, []);
 
+  const setOrderModeAndSyncLines = useCallback((mode: OrderModalMode) => {
+    setOrderMode(mode);
+    setLines((prev) =>
+      prev.map((line) => {
+        if (mode === "ledger_swap" && (line.kind === "receipt" || line.kind === "payment")) {
+          return { ...line, fundedFrom: "customer_balance", accountId: "" };
+        }
+        if (mode === "exchange" && (line.kind === "receipt" || line.kind === "payment")) {
+          return { ...line, fundedFrom: "cash", accountId: "" };
+        }
+        return line;
+      }),
+    );
+  }, []);
+
   const buildPayload = useCallback(() => {
-    const receiptLines = lines.filter((l) => l.kind === "receipt");
-    const paymentLines = lines.filter((l) => l.kind === "payment");
+    const rawReceiptLines = lines.filter((l) => l.kind === "receipt");
+    const rawPaymentLines = lines.filter((l) => l.kind === "payment");
+    const receiptLines = rawReceiptLines.map((l) => applyOrderModeToLine(l, orderMode));
+    const paymentLines = rawPaymentLines.map((l) => applyOrderModeToLine(l, orderMode));
     const scLines = lines.filter((l) => l.kind === "service_charge");
     const firstReceiptAcc = receiptLines.find(
       (l) => l.accountId && (l.fundedFrom ?? "cash") === "cash",
@@ -411,8 +460,9 @@ export function useUnifiedOrderModal(
       amountSell: Number(amountSell || 0),
       rate: Number(rate || 1),
       handlerId: handlerId ? Number(handlerId) : null,
-      buyAccountId: firstReceiptAcc ? Number(firstReceiptAcc) : undefined,
-      sellAccountId: firstPayAcc ? Number(firstPayAcc) : undefined,
+      buyAccountId: isLedgerSwap ? undefined : firstReceiptAcc ? Number(firstReceiptAcc) : undefined,
+      sellAccountId: isLedgerSwap ? undefined : firstPayAcc ? Number(firstPayAcc) : undefined,
+      orderMode,
       remarks: showRemarks && remarks.trim() ? remarks.trim() : null,
       orderDate: orderDate ? new Date(orderDate).toISOString() : new Date().toISOString(),
       tagIds: selectedTagIds,
@@ -466,6 +516,8 @@ export function useUnifiedOrderModal(
     accounts,
     orderDate,
     selectedTagIds,
+    orderMode,
+    isLedgerSwap,
   ]);
 
   const postPaymentLine = async (orderId: number, line: UnifiedLine, confirmEach: boolean) => {
@@ -640,7 +692,26 @@ export function useUnifiedOrderModal(
       alert("Customer name and currency pair are required.");
       return;
     }
-    const { receiptLines, paymentLines } = buildPayload();
+    if (isLedgerSwap && !selectedCustomerId) {
+      alert("Customer is required for ledger swap orders.");
+      return;
+    }
+    const { receiptLines, paymentLines, resolvedScLines } = buildPayload();
+    const hasCofUsage = orderUsesCustomerFunding({
+      receiptLines: receiptLines.map((l) => ({
+        amount: Number(l.amount) || 0,
+        fundedFrom: (l.fundedFrom ?? "cash") as "cash" | "customer_balance",
+      })),
+      paymentLines: paymentLines.map((l) => ({
+        amount: Number(l.amount) || 0,
+        fundedFrom: (l.fundedFrom ?? "cash") as "cash" | "customer_balance",
+      })),
+      scLines: resolvedScLines,
+    });
+    if (hasCofUsage && !selectedCustomerId) {
+      alert("Customer is required to use prepaid balance or customer advance.");
+      return;
+    }
     const hasValidReceiptLine = receiptLines.some((l) => {
       const amt = Number(l.amount) || 0;
       if (amt <= 0) return false;
@@ -658,10 +729,15 @@ export function useUnifiedOrderModal(
       return;
     }
     if (!hasValidPaymentLine) {
-      alert("At least one payment line must have an amount and either a company account or customer advance (Bal).");
+      alert(
+        isLedgerSwap
+          ? "At least one payment line with amount is required."
+          : "At least one payment line must have an amount and either a company account or customer advance (Bal).",
+      );
       return;
     }
 
+    if (!isLedgerSwap) {
     const partialReceiptLines = receiptLines.filter((l) => {
       const hasAmount = (Number(l.amount) || 0) > 0;
       if (!hasAmount) return false;
@@ -685,6 +761,7 @@ export function useUnifiedOrderModal(
       alert("Cash payment lines need a company account.");
       return;
     }
+    }
 
     const receiptTotal = receiptLines.reduce((s, l) => s + (Number(l.amount) || 0), 0);
     const paymentTotal = paymentLines.reduce((s, l) => s + (Number(l.amount) || 0), 0);
@@ -698,24 +775,49 @@ export function useUnifiedOrderModal(
       alert(`Payment total (${paymentTotal.toFixed(2)}) must match Amount Sell (${sell.toFixed(2)})`);
       return;
     }
-    const badR = receiptLines.filter((l) => {
-      const amt = Number(l.amount) || 0;
-      if (amt <= 0) return false;
-      return (l.fundedFrom ?? "cash") === "cash" && !l.accountId;
-    });
+    const badR = isLedgerSwap
+      ? []
+      : receiptLines.filter((l) => {
+          const amt = Number(l.amount) || 0;
+          if (amt <= 0) return false;
+          return (l.fundedFrom ?? "cash") === "cash" && !l.accountId;
+        });
     if (badR.length) {
       alert("Each cash receipt line needs a company account.");
       return;
     }
-    const badP = paymentLines.filter((l) => {
-      const amt = Number(l.amount) || 0;
-      if (amt <= 0) return false;
-      return (l.fundedFrom ?? "cash") === "cash" && !l.accountId;
-    });
+    const badP = isLedgerSwap
+      ? []
+      : paymentLines.filter((l) => {
+          const amt = Number(l.amount) || 0;
+          if (amt <= 0) return false;
+          return (l.fundedFrom ?? "cash") === "cash" && !l.accountId;
+        });
     if (badP.length) {
       alert("Each cash payment line needs a company account.");
       return;
     }
+
+    const cofError = validateCofBalancesBeforeComplete({
+      receiptLines: receiptLines.map((l) => ({
+        amount: Number(l.amount) || 0,
+        fundedFrom: (l.fundedFrom ?? "cash") as "cash" | "customer_balance",
+      })),
+      paymentLines: paymentLines.map((l) => ({
+        amount: Number(l.amount) || 0,
+        fundedFrom: (l.fundedFrom ?? "cash") as "cash" | "customer_balance",
+      })),
+      scLines: resolvedScLines,
+      fromCurrency,
+      toCurrency,
+      isLedgerSwap,
+      fundingCurrencies: fundingBalances?.currencies ?? [],
+    });
+    if (cofError) {
+      alert(cofError);
+      return;
+    }
+
     isSubmittingRef.current = true;
     setIsSaving(true);
     try {
@@ -759,11 +861,18 @@ export function useUnifiedOrderModal(
     }
   };
 
-  const openNew = useCallback(() => {
-    resetForm();
-    setEditingOrderId(null);
-    setIsOpen(true);
-  }, [resetForm]);
+  const openNew = useCallback(
+    (mode: OrderModalMode = "exchange") => {
+      resetForm();
+      setOrderMode(mode);
+      if (mode === "ledger_swap") {
+        setLines([newLine("receipt", "ledger_swap"), newLine("payment", "ledger_swap")]);
+      }
+      setEditingOrderId(null);
+      setIsOpen(true);
+    },
+    [resetForm],
+  );
 
   const openEdit = useCallback((orderId: number) => {
     resetForm();
@@ -821,5 +930,8 @@ export function useUnifiedOrderModal(
     handleAmountSellChange,
     handleRateChange,
     getBaseCurrency,
+    orderMode,
+    setOrderMode: setOrderModeAndSyncLines,
+    isLedgerSwap,
   };
 }

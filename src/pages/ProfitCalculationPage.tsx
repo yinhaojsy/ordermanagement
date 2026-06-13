@@ -15,6 +15,8 @@ import {
   useDeleteProfitCalculationMutation,
   useUpdateAccountMultiplierMutation,
   useUpdateExchangeRateMutation,
+  useUpdateDepositExchangeRateMutation,
+  useGetCustomerDepositTotalsByCurrencyQuery,
   useDeleteGroupMutation,
   useRenameGroupMutation,
   useSetDefaultProfitCalculationMutation,
@@ -22,6 +24,13 @@ import {
 } from "../services/api";
 import { useProfitSummary } from "../hooks/useProfitSummary";
 import { convertCurrency } from "../utils/orders/orderCalculations";
+import {
+  buildDepositExchangeRateMap,
+  buildEffectiveExchangeRateMap,
+  computeCustomerDepositConverted,
+  convertDepositCurrencyAmount,
+  resolveLiveExchangeRate,
+} from "../utils/profit/customerDepositConversion";
 import type { Account, ProfitAccountMultiplier, ProfitExchangeRate } from "../types";
 
 // Helper function to format currency with proper number formatting
@@ -42,6 +51,8 @@ export default function ProfitCalculationPage() {
   const [deleteCalculation, { isLoading: isDeleting }] = useDeleteProfitCalculationMutation();
   const [updateMultiplier] = useUpdateAccountMultiplierMutation();
   const [updateRate] = useUpdateExchangeRateMutation();
+  const [updateDepositRate] = useUpdateDepositExchangeRateMutation();
+  const { data: depositTotalsData } = useGetCustomerDepositTotalsByCurrencyQuery();
   const [deleteGroup] = useDeleteGroupMutation();
   const [renameGroup] = useRenameGroupMutation();
   const [setDefaultCalculation] = useSetDefaultProfitCalculationMutation();
@@ -75,10 +86,13 @@ export default function ProfitCalculationPage() {
   const [multiplierInputs, setMultiplierInputs] = useState<Map<number, string>>(new Map());
   // Track exchange rate input values as raw strings to allow 0 and partial input
   const [exchangeRateInputs, setExchangeRateInputs] = useState<Map<string, string>>(new Map());
+  const [depositExchangeRateInputs, setDepositExchangeRateInputs] = useState<Map<string, string>>(new Map());
   
   // Track pending changes that haven't been saved to DB
   const [pendingMultipliers, setPendingMultipliers] = useState<Map<number, { multiplier: number; groupId?: string; groupName?: string }>>(new Map());
   const [pendingExchangeRates, setPendingExchangeRates] = useState<Map<string, number>>(new Map());
+  const [pendingDepositExchangeRates, setPendingDepositExchangeRates] = useState<Map<string, number>>(new Map());
+  const [pendingUseLinkedDepositExchangeRates, setPendingUseLinkedDepositExchangeRates] = useState<boolean | null>(null);
   const [pendingInitialInvestment, setPendingInitialInvestment] = useState<number | null>(null);
   const [pendingGroupAssignments, setPendingGroupAssignments] = useState<Map<number, { groupId: string; groupName: string }>>(new Map());
   const [isSaving, setIsSaving] = useState(false);
@@ -92,10 +106,13 @@ export default function ProfitCalculationPage() {
   useEffect(() => {
     setCreatedGroups([]);
     setMultiplierInputs(new Map()); // Reset multiplier inputs when calculation changes
-    setExchangeRateInputs(new Map()); // Reset exchange rate inputs when calculation changes
+    setExchangeRateInputs(new Map());
+    setDepositExchangeRateInputs(new Map());
     // Reset all pending changes when calculation changes
     setPendingMultipliers(new Map());
     setPendingExchangeRates(new Map());
+    setPendingDepositExchangeRates(new Map());
+    setPendingUseLinkedDepositExchangeRates(null);
     setPendingInitialInvestment(null);
     setPendingGroupAssignments(new Map());
     // Sync createdGroups with database groups when calculation loads
@@ -235,13 +252,98 @@ export default function ProfitCalculationPage() {
     return Array.from(currenciesSet);
   }, [accountCalculations]);
 
+  const customerDepositTotals = useMemo(
+    () => depositTotalsData?.currencies ?? [],
+    [depositTotalsData],
+  );
+
+  const depositCurrencies = useMemo(
+    () => customerDepositTotals.map((row) => row.currencyCode),
+    [customerDepositTotals],
+  );
+
+  const depositTotalsByCurrency = useMemo(() => {
+    const map = new Map<string, number>();
+    customerDepositTotals.forEach((row) => {
+      map.set(row.currencyCode, row.totalFundedBalance);
+    });
+    return map;
+  }, [customerDepositTotals]);
+
+  const isDepositRatesLinked = useMemo(() => {
+    if (pendingUseLinkedDepositExchangeRates !== null) {
+      return pendingUseLinkedDepositExchangeRates;
+    }
+    if (!calculationDetails) return true;
+    return (
+      calculationDetails.useLinkedDepositExchangeRates !== false &&
+      calculationDetails.useLinkedDepositExchangeRates !== 0
+    );
+  }, [calculationDetails, pendingUseLinkedDepositExchangeRates]);
+
+  const effectiveExchangeRateMap = useMemo(() => {
+    if (!calculationDetails) return new Map<string, number>();
+    return buildEffectiveExchangeRateMap(
+      calculationDetails.targetCurrencyCode,
+      uniqueCurrencies,
+      exchangeRateMap,
+      exchangeRateInputs,
+    );
+  }, [calculationDetails, uniqueCurrencies, exchangeRateMap, exchangeRateInputs]);
+
+  const depositExchangeRateMap = useMemo(() => {
+    if (!calculationDetails) return new Map<string, number>();
+    return buildDepositExchangeRateMap(
+      calculationDetails.targetCurrencyCode,
+      exchangeRateMap,
+      calculationDetails.depositExchangeRates ?? [],
+      isDepositRatesLinked,
+      pendingDepositExchangeRates,
+    );
+  }, [
+    calculationDetails,
+    exchangeRateMap,
+    isDepositRatesLinked,
+    pendingDepositExchangeRates,
+  ]);
+
+  const effectiveDepositExchangeRateMap = useMemo(() => {
+    if (!calculationDetails) return new Map<string, number>();
+    if (isDepositRatesLinked) {
+      const linkedCurrencies = Array.from(
+        new Set([...uniqueCurrencies, ...depositCurrencies]),
+      );
+      return buildEffectiveExchangeRateMap(
+        calculationDetails.targetCurrencyCode,
+        linkedCurrencies,
+        exchangeRateMap,
+        exchangeRateInputs,
+      );
+    }
+    return buildEffectiveExchangeRateMap(
+      calculationDetails.targetCurrencyCode,
+      depositCurrencies,
+      depositExchangeRateMap,
+      depositExchangeRateInputs,
+    );
+  }, [
+    calculationDetails,
+    isDepositRatesLinked,
+    uniqueCurrencies,
+    depositCurrencies,
+    exchangeRateMap,
+    exchangeRateInputs,
+    depositExchangeRateMap,
+    depositExchangeRateInputs,
+  ]);
+
   // Calculate converted amounts
   const convertedAmounts = useMemo(() => {
     if (!calculationDetails) return new Map<string, number>();
     
     const converted = new Map<string, number>(); // currency -> converted amount
     
-    groupSums.forEach((currencySums, groupId) => {
+    groupSums.forEach((currencySums) => {
       currencySums.forEach((sum, currency) => {
         if (currency === calculationDetails.targetCurrencyCode) {
           // Same currency, no conversion needed
@@ -250,7 +352,7 @@ export default function ProfitCalculationPage() {
         } else {
           // Need to convert
           const key = `${currency}_${calculationDetails.targetCurrencyCode}`;
-          const rate = exchangeRateMap.get(key) || 0;
+          const rate = effectiveExchangeRateMap.get(key) || 0;
           if (rate > 0) {
             const convertedAmount = convertCurrency(sum, rate, currency, calculationDetails.targetCurrencyCode, currencies);
             const current = converted.get(calculationDetails.targetCurrencyCode) || 0;
@@ -261,7 +363,7 @@ export default function ProfitCalculationPage() {
     });
     
     return converted;
-  }, [calculationDetails, groupSums, exchangeRateMap, currencies]);
+  }, [calculationDetails, groupSums, effectiveExchangeRateMap, currencies]);
 
   // Calculate total converted amount
   const totalConverted = useMemo(() => {
@@ -269,18 +371,30 @@ export default function ProfitCalculationPage() {
     return convertedAmounts.get(calculationDetails.targetCurrencyCode) || 0;
   }, [calculationDetails, convertedAmounts]);
 
+  const totalCustomerDepositConverted = useMemo(() => {
+    if (!calculationDetails) return 0;
+    return computeCustomerDepositConverted(
+      customerDepositTotals,
+      calculationDetails.targetCurrencyCode,
+      effectiveDepositExchangeRateMap,
+      currencies,
+    );
+  }, [calculationDetails, customerDepositTotals, effectiveDepositExchangeRateMap, currencies]);
+
   // Calculate profit (use pending initial investment if available)
   const profit = useMemo(() => {
     if (!calculationDetails) return 0;
     const investment = pendingInitialInvestment !== null ? pendingInitialInvestment : calculationDetails.initialInvestment;
-    return totalConverted - investment;
-  }, [calculationDetails, totalConverted, pendingInitialInvestment]);
+    return totalConverted - totalCustomerDepositConverted - investment;
+  }, [calculationDetails, totalConverted, totalCustomerDepositConverted, pendingInitialInvestment]);
   
   // Check if there are unsaved changes
   const hasUnsavedChanges = useMemo(() => {
     // Simple check: if any pending changes exist, show the button
     const hasChanges = pendingMultipliers.size > 0 || 
-           pendingExchangeRates.size > 0 || 
+           pendingExchangeRates.size > 0 ||
+           pendingDepositExchangeRates.size > 0 ||
+           pendingUseLinkedDepositExchangeRates !== null ||
            pendingInitialInvestment !== null ||
            pendingGroupAssignments.size > 0;
     // Debug log (remove in production)
@@ -293,7 +407,14 @@ export default function ProfitCalculationPage() {
       });
     }
     return hasChanges;
-  }, [pendingMultipliers, pendingExchangeRates, pendingInitialInvestment, pendingGroupAssignments]);
+  }, [
+    pendingMultipliers,
+    pendingExchangeRates,
+    pendingDepositExchangeRates,
+    pendingUseLinkedDepositExchangeRates,
+    pendingInitialInvestment,
+    pendingGroupAssignments,
+  ]);
 
   const handleCreateCalculation = async () => {
     if (!newCalculationName || !newCalculationCurrency) {
@@ -386,6 +507,29 @@ export default function ProfitCalculationPage() {
           }).unwrap()
         );
       });
+
+      if (pendingUseLinkedDepositExchangeRates !== null) {
+        promises.push(
+          updateCalculation({
+            id: selectedCalculationId,
+            data: { useLinkedDepositExchangeRates: pendingUseLinkedDepositExchangeRates },
+          }).unwrap(),
+        );
+      }
+
+      if (pendingUseLinkedDepositExchangeRates !== true) {
+        pendingDepositExchangeRates.forEach((rate, key) => {
+          const [fromCurrency, toCurrency] = key.split("_");
+          promises.push(
+            updateDepositRate({
+              calculationId: selectedCalculationId,
+              fromCurrencyCode: fromCurrency,
+              toCurrencyCode: toCurrency,
+              rate,
+            }).unwrap(),
+          );
+        });
+      }
       
       // Save pending initial investment
       if (pendingInitialInvestment !== null) {
@@ -404,12 +548,14 @@ export default function ProfitCalculationPage() {
       
       setPendingMultipliers(new Map());
       setPendingExchangeRates(new Map());
+      setPendingDepositExchangeRates(new Map());
+      setPendingUseLinkedDepositExchangeRates(null);
       setPendingInitialInvestment(null);
       setPendingGroupAssignments(new Map());
-
       // Clear multiplier and exchange rate inputs to sync with database
       setMultiplierInputs(new Map());
       setExchangeRateInputs(new Map());
+      setDepositExchangeRateInputs(new Map());
 
       setAlertModal({
         isOpen: true,
@@ -726,7 +872,43 @@ export default function ProfitCalculationPage() {
   );
 
   // Use shared hook for profit summary calculation
-  const defaultSummary = useProfitSummary(defaultCalculationDetails, accounts, currencies);
+  const defaultSummary = useProfitSummary(
+    defaultCalculationDetails,
+    accounts,
+    currencies,
+    customerDepositTotals,
+  );
+
+  const handleStartDepositRatesEdit = useCallback(() => {
+    if (!calculationDetails) return;
+    setPendingUseLinkedDepositExchangeRates(false);
+
+    const seeded = new Map<string, number>();
+    depositCurrencies.forEach((currency) => {
+      const key = `${currency}_${calculationDetails.targetCurrencyCode}`;
+      const linkedRate = exchangeRateMap.get(key);
+      if (linkedRate && linkedRate > 0) {
+        seeded.set(key, linkedRate);
+        return;
+      }
+      const customRate = calculationDetails.depositExchangeRates?.find(
+        (er) =>
+          er.fromCurrencyCode === currency &&
+          er.toCurrencyCode === calculationDetails.targetCurrencyCode,
+      )?.rate;
+      if (customRate && customRate > 0) {
+        seeded.set(key, customRate);
+      }
+    });
+    setPendingDepositExchangeRates(seeded);
+    setDepositExchangeRateInputs(new Map());
+  }, [calculationDetails, depositCurrencies, exchangeRateMap]);
+
+  const handleResetDepositRatesToMatch = useCallback(() => {
+    setPendingUseLinkedDepositExchangeRates(true);
+    setPendingDepositExchangeRates(new Map());
+    setDepositExchangeRateInputs(new Map());
+  }, []);
 
   return (
     <div className="space-y-6">
@@ -1178,9 +1360,13 @@ export default function ProfitCalculationPage() {
             <div className="space-y-4">
               {uniqueCurrencies.map((currency) => {
                 const key = `${currency}_${calculationDetails.targetCurrencyCode}`;
-                // For same currency, default rate to 1 if not set
-                const defaultRate = currency === calculationDetails.targetCurrencyCode ? 1 : 0;
-                const rate = exchangeRateMap.get(key) || defaultRate;
+                const rate = resolveLiveExchangeRate(
+                  key,
+                  currency,
+                  calculationDetails.targetCurrencyCode,
+                  exchangeRateMap,
+                  exchangeRateInputs,
+                );
                 const currencySum = Array.from(groupSums.values())
                   .reduce((sum, currencySums) => sum + (currencySums.get(currency) || 0), 0);
                 const converted = rate > 0
@@ -1259,6 +1445,173 @@ export default function ProfitCalculationPage() {
             </div>
           </SectionCard>
 
+          {/* Customer deposit currency conversion */}
+          <SectionCard
+            title={t("profit.customerDepositConversion")}
+            actions={
+              <div className="flex items-center gap-2">
+                {!isDepositRatesLinked && (
+                  <button
+                    type="button"
+                    onClick={handleResetDepositRatesToMatch}
+                    className="text-xs font-medium text-indigo-600 hover:text-indigo-800"
+                  >
+                    {t("profit.resetDepositRatesToMatch")}
+                  </button>
+                )}
+                {isDepositRatesLinked ? (
+                  <button
+                    type="button"
+                    onClick={handleStartDepositRatesEdit}
+                    className="rounded-lg border border-slate-200 p-2 text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+                    title={t("profit.editDepositRates")}
+                    aria-label={t("profit.editDepositRates")}
+                  >
+                    <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                      <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z" />
+                    </svg>
+                  </button>
+                ) : null}
+              </div>
+            }
+          >
+            <p className="mb-4 text-sm text-slate-500">
+              {isDepositRatesLinked
+                ? t("profit.depositRatesLinked")
+                : t("profit.depositRatesCustom")}
+            </p>
+            <div className="space-y-4">
+              {depositCurrencies.length === 0 ? (
+                <p className="text-sm text-slate-400">{t("profit.noCustomerDeposits")}</p>
+              ) : (
+                depositCurrencies.map((currency) => {
+                  const key = `${currency}_${calculationDetails.targetCurrencyCode}`;
+                  const currencySum = depositTotalsByCurrency.get(currency) ?? 0;
+                  const rate = resolveLiveExchangeRate(
+                    key,
+                    currency,
+                    calculationDetails.targetCurrencyCode,
+                    depositExchangeRateMap,
+                    isDepositRatesLinked ? exchangeRateInputs : depositExchangeRateInputs,
+                  );
+                  const converted =
+                    rate > 0
+                      ? convertDepositCurrencyAmount(
+                          currencySum,
+                          currency,
+                          calculationDetails.targetCurrencyCode,
+                          effectiveDepositExchangeRateMap,
+                          currencies,
+                          isDepositRatesLinked ? exchangeRateInputs : depositExchangeRateInputs,
+                        )
+                      : currencySum;
+                  const rateInputValue = depositExchangeRateInputs.has(key)
+                    ? depositExchangeRateInputs.get(key)
+                    : rate > 0
+                      ? rate
+                      : currency === calculationDetails.targetCurrencyCode
+                        ? 1
+                        : "";
+
+                  return (
+                    <div key={currency} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                      <div className="grid gap-3 md:grid-cols-3">
+                        <div>
+                          <label className="mb-1 block text-sm font-semibold text-slate-700">
+                            {t("profit.customerDepositSum", { currency })}
+                          </label>
+                          <div
+                            className={`text-lg font-semibold ${
+                              currencySum < 0 ? "text-rose-600" : "text-slate-900"
+                            }`}
+                          >
+                            {currencySum < 0 ? "-" : ""}
+                            {formatCurrency(Math.abs(currencySum), currency)}
+                          </div>
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-sm font-semibold text-slate-700">
+                            {t("profit.exchangeRate")} ({currency} →{" "}
+                            {calculationDetails.targetCurrencyCode})
+                          </label>
+                          <input
+                            type="number"
+                            step="0.0001"
+                            min="0"
+                            readOnly={isDepositRatesLinked}
+                            className={`w-full rounded border px-2 py-1 ${
+                              isDepositRatesLinked
+                                ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-600"
+                                : "border-slate-200"
+                            }`}
+                            value={rateInputValue}
+                            onChange={(e) => {
+                              if (isDepositRatesLinked) return;
+                              const inputValue = e.target.value;
+                              setDepositExchangeRateInputs((prev) => {
+                                const newMap = new Map(prev);
+                                newMap.set(key, inputValue);
+                                return newMap;
+                              });
+                              const parsed = parseFloat(inputValue);
+                              const newRate =
+                                Number.isFinite(parsed) && parsed >= 0
+                                  ? parsed
+                                  : currency === calculationDetails.targetCurrencyCode
+                                    ? 1
+                                    : 0;
+                              setPendingDepositExchangeRates((prev) => {
+                                const newMap = new Map(prev);
+                                newMap.set(key, newRate);
+                                return newMap;
+                              });
+                            }}
+                            onWheel={(e) => (e.target as HTMLInputElement).blur()}
+                          />
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-sm font-semibold text-slate-700">
+                            {t("profit.converted")} ({calculationDetails.targetCurrencyCode})
+                          </label>
+                          <div
+                            className={`text-lg font-bold ${
+                              converted < 0 ? "text-rose-600" : "text-slate-900"
+                            }`}
+                          >
+                            {converted < 0 ? "-" : ""}
+                            {formatCurrency(
+                              Math.abs(converted),
+                              calculationDetails.targetCurrencyCode,
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+
+              <div className="mt-4 border-t-2 border-slate-300 pt-4">
+                <div className="flex items-center justify-between">
+                  <span className="text-lg font-semibold text-slate-900">
+                    {t("profit.totalCustomerDeposit")} ({calculationDetails.targetCurrencyCode}):
+                  </span>
+                  <span
+                    className={`text-2xl font-bold ${
+                      totalCustomerDepositConverted < 0 ? "text-rose-600" : "text-indigo-900"
+                    }`}
+                  >
+                    {totalCustomerDepositConverted < 0 ? "-" : ""}
+                    {formatCurrency(
+                      Math.abs(totalCustomerDepositConverted),
+                      calculationDetails.targetCurrencyCode,
+                    )}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </SectionCard>
+
           {/* Final Profit Calculation */}
           <SectionCard
             title={t("profit.finalProfit")}
@@ -1284,11 +1637,17 @@ export default function ProfitCalculationPage() {
                 />
               </div>
               
-              <div className="grid gap-4 md:grid-cols-2">
+              <div className="grid gap-4 md:grid-cols-3">
                 <div className="border border-slate-200 rounded-lg p-4 bg-slate-50">
                   <div className="text-sm text-slate-600 mb-1">{t("profit.totalConverted")}</div>
                   <div className="text-2xl font-bold text-slate-900">
                     {formatCurrency(totalConverted, calculationDetails.targetCurrencyCode)}
+                  </div>
+                </div>
+                <div className="border border-slate-200 rounded-lg p-4 bg-indigo-50">
+                  <div className="text-sm text-slate-600 mb-1">{t("profit.totalCustomerDeposit")}</div>
+                  <div className="text-2xl font-bold text-indigo-900">
+                    {formatCurrency(totalCustomerDepositConverted, calculationDetails.targetCurrencyCode)}
                   </div>
                 </div>
                 <div className="border border-slate-200 rounded-lg p-4 bg-slate-50">
@@ -1297,6 +1656,10 @@ export default function ProfitCalculationPage() {
                     {formatCurrency(pendingInitialInvestment !== null ? pendingInitialInvestment : calculationDetails.initialInvestment, calculationDetails.targetCurrencyCode)}
                   </div>
                 </div>
+              </div>
+
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+                {t("profit.profitFormula")}
               </div>
               
               <div className="border-t-2 border-slate-300 pt-4">

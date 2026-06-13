@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, type ReactNode, memo } from "react"
 import { useTranslation } from "react-i18next";
 
 interface AccountTooltipProps {
-  accounts: Array<{ accountId: number; accountName: string; amount: number }>;
+  accounts: Array<{ accountId: number | null; accountName: string; amount: number }>;
   label: string;
   children: ReactNode;
   profitAmount?: number | null;

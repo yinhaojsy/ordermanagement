@@ -8,12 +8,14 @@ import type {
   Tag,
 } from "../../types";
 import Badge from "../common/Badge";
-import type { UnifiedLine, UnifiedLineKind } from "../../hooks/orders/useUnifiedOrderModal";
+import type { UnifiedLine, UnifiedLineKind, OrderModalMode } from "../../hooks/orders/useUnifiedOrderModal";
 import { CurrencyPairSwapButton } from "./CurrencyPairSwapButton";
 import { AccountSelect } from "../common/AccountSelect";
 import { CustomerSelect } from "../common/CustomerSelect";
 import FileUploadModal from "../common/FileUploadModal";
 import { CustomerFundingSummaryInline } from "./CustomerFundingSummaryInline";
+import { CustomerLedgerEntryIcon } from "../customers/CustomerLedgerEntryIcon";
+import { floorToDisplayAmount } from "../../utils/orders/orderAmountTolerance";
 
 export type NewOrderViewerState = {
   isOpen: boolean;
@@ -74,6 +76,11 @@ type Props = {
   advanceBalance?: CustomerLedgerBalanceInfo;
   fundingSummary?: CustomerFundingBalanceRow[];
   fundingSummaryLoading?: boolean;
+  orderMode: OrderModalMode;
+  setOrderMode: (mode: OrderModalMode) => void;
+  isLedgerSwap: boolean;
+  canDepositWithdraw?: boolean;
+  onOpenLedgerEntry?: () => void;
 };
 
 const kindLabel = (k: UnifiedLineKind, t: (k: string) => string) => {
@@ -92,10 +99,33 @@ const kindLabel = (k: UnifiedLineKind, t: (k: string) => string) => {
 };
 
 export function formatLedgerAmount(amount: number) {
-  return amount.toLocaleString("en-US", {
+  const floored = floorToDisplayAmount(amount);
+  return floored.toLocaleString("en-US", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
+}
+
+export function OrderSwapDirectionField({
+  labelKey,
+  labelWithCurrencyKey,
+  currency,
+  t,
+}: {
+  labelKey: string;
+  labelWithCurrencyKey: string;
+  currency?: string;
+  t: (key: string, opts?: Record<string, string>) => string;
+}) {
+  const label = currency?.trim()
+    ? t(labelWithCurrencyKey, { currency: currency.trim() })
+    : t(labelKey);
+
+  return (
+    <div className="flex min-h-[34px] min-w-[240px] flex-[1_1_240px] items-center rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-sm font-medium text-indigo-900">
+      {label}
+    </div>
+  );
 }
 
 export function OrderLineBalanceField({
@@ -452,6 +482,11 @@ export default function NewOrderModal({
   advanceBalance,
   fundingSummary = [],
   fundingSummaryLoading = false,
+  orderMode,
+  setOrderMode,
+  isLedgerSwap,
+  canDepositWithdraw = false,
+  onOpenLedgerEntry,
 }: Props) {
   const { t } = useTranslation();
   const [uploadModalLineId, setUploadModalLineId] = useState<string | null>(null);
@@ -509,18 +544,60 @@ export default function NewOrderModal({
       aria-labelledby="new-order-modal-title"
     >
       <div className="max-h-[92vh] w-full max-w-4xl overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-xl">
-        <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white px-6 py-4">
-          <h2 id="new-order-modal-title" className="text-lg font-semibold text-slate-900">
-            {editingOrderId ? t("orders.editOrderTitle") : t("orders.newOrder")}
-          </h2>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
-            aria-label={t("common.close")}
-          >
-            ✕
-          </button>
+        <div className="sticky top-0 z-10 border-b border-slate-200 bg-white px-6 py-4">
+          <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
+            <h2 id="new-order-modal-title" className="text-lg font-semibold text-slate-900">
+              {editingOrderId
+                ? isLedgerSwap
+                  ? t("orders.editSwapOrderTitle")
+                  : t("orders.editOrderTitle")
+                : isLedgerSwap
+                  ? t("orders.newSwapOrder")
+                  : t("orders.newOrder")}
+            </h2>
+            <div className="flex justify-center">
+              {!editingOrderId ? (
+                <div className="inline-flex rounded-lg border border-slate-200 p-0.5 text-sm font-semibold">
+                  <button
+                    type="button"
+                    className={`rounded-md px-4 py-1.5 transition-colors ${
+                      orderMode === "exchange"
+                        ? "bg-slate-800 text-white"
+                        : "text-slate-600 hover:bg-slate-50"
+                    }`}
+                    onClick={() => setOrderMode("exchange")}
+                  >
+                    {t("orders.orderModeExchange")}
+                  </button>
+                  <button
+                    type="button"
+                    className={`rounded-md px-4 py-1.5 transition-colors ${
+                      orderMode === "ledger_swap"
+                        ? "bg-indigo-700 text-white"
+                        : "text-slate-600 hover:bg-slate-50"
+                    }`}
+                    onClick={() => setOrderMode("ledger_swap")}
+                  >
+                    {t("orders.orderModeSwap")}
+                  </button>
+                </div>
+              ) : isLedgerSwap ? (
+                <span className="rounded-full bg-indigo-100 px-3 py-1 text-xs font-semibold text-indigo-800">
+                  {t("orders.ledgerSwapBadge")}
+                </span>
+              ) : null}
+            </div>
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={onClose}
+                className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
+                aria-label={t("common.close")}
+              >
+                ✕
+              </button>
+            </div>
+          </div>
         </div>
 
         <form className="space-y-5 px-6 py-5" onSubmit={(e) => e.preventDefault()}>
@@ -532,23 +609,36 @@ export default function NewOrderModal({
                   {t("orders.customerName")}
                 </label>
                 <div className="flex items-end gap-2">
-                  <CustomerSelect
-                    value={selectedCustomerId}
-                    onChange={(value) => {
-                      const selected = customers.find((c) => c.id === Number(value));
-                      setCustomerName(selected?.name || "");
-                    }}
-                    customers={customers}
-                    placeholder={t("orders.selectCustomer") || "Select customer"}
-                    required
-                    disabled={!!editingOrderId}
-                    t={t}
-                  />
+                  <div className="min-w-0 flex-1">
+                    <CustomerSelect
+                      value={selectedCustomerId}
+                      onChange={(value) => {
+                        const selected = customers.find((c) => c.id === Number(value));
+                        setCustomerName(selected?.name || "");
+                      }}
+                      customers={customers}
+                      placeholder={t("orders.selectCustomer") || "Select customer"}
+                      required
+                      disabled={!!editingOrderId}
+                      t={t}
+                    />
+                  </div>
+                  {!editingOrderId && canDepositWithdraw && selectedCustomerId && onOpenLedgerEntry ? (
+                    <button
+                      type="button"
+                      onClick={onOpenLedgerEntry}
+                      title={t("orders.customerLedgerEntry")}
+                      aria-label={t("orders.customerLedgerEntry")}
+                      className="flex shrink-0 items-center justify-center rounded-lg border border-emerald-300 bg-emerald-50 p-2 text-emerald-700 transition-colors hover:bg-emerald-100"
+                    >
+                      <CustomerLedgerEntryIcon />
+                    </button>
+                  ) : null}
                   {!editingOrderId ? (
                     <button
                       type="button"
                       onClick={onOpenCreateCustomer}
-                      className="rounded-lg border border-blue-300 px-4 py-2 text-sm font-semibold text-blue-700 transition-colors hover:bg-blue-50 whitespace-nowrap"
+                      className="rounded-lg border border-blue-300 px-4 py-2 text-sm font-semibold text-blue-700 transition-colors hover:bg-blue-50 whitespace-nowrap shrink-0"
                     >
                       {t("orders.createNewCustomer")}
                     </button>
@@ -583,6 +673,10 @@ export default function NewOrderModal({
               <CustomerFundingSummaryInline
                 items={fundingSummary}
                 loading={fundingSummaryLoading}
+                fromCurrency={fromCurrency}
+                toCurrency={toCurrency}
+                onFillBuy={onAmountBuyChange}
+                onFillSell={onAmountSellChange}
               />
             ) : null}
           </div>
@@ -847,7 +941,7 @@ export default function NewOrderModal({
                         t={t}
                       />
                     )}
-                  {line.kind === "receipt" && (
+                  {line.kind === "receipt" && !isLedgerSwap && (
                     <div className="flex shrink-0 rounded-md border border-slate-200 overflow-hidden text-xs font-semibold">
                       <button
                         type="button"
@@ -880,7 +974,15 @@ export default function NewOrderModal({
                       </button>
                     </div>
                   )}
-                  {line.kind === "payment" && (
+                  {line.kind === "receipt" && isLedgerSwap && (
+                    <OrderSwapDirectionField
+                      labelKey="orders.swapFrom"
+                      labelWithCurrencyKey="orders.swapFromWithCurrency"
+                      currency={fromCurrency}
+                      t={t}
+                    />
+                  )}
+                  {line.kind === "payment" && !isLedgerSwap && (
                     <div className="flex shrink-0 rounded-md border border-slate-200 overflow-hidden text-xs font-semibold">
                       <button
                         type="button"
@@ -914,6 +1016,7 @@ export default function NewOrderModal({
                     </div>
                   )}
                   {line.kind === "receipt" &&
+                    !isLedgerSwap &&
                     (line.fundedFrom ?? "cash") === "customer_balance" && (
                       <OrderLineBalanceField
                         messageKey="orders.linePrepaidBalance"
@@ -923,6 +1026,7 @@ export default function NewOrderModal({
                       />
                     )}
                   {line.kind === "payment" &&
+                    !isLedgerSwap &&
                     (line.fundedFrom ?? "cash") === "customer_balance" && (
                       <OrderLineBalanceField
                         messageKey="orders.lineAdvanceBalance"
@@ -932,7 +1036,17 @@ export default function NewOrderModal({
                         t={t}
                       />
                     )}
-                  {(line.kind === "profit" || (line.fundedFrom ?? "cash") === "cash") && (
+                  {line.kind === "payment" && isLedgerSwap && (
+                    <OrderSwapDirectionField
+                      labelKey="orders.swapTo"
+                      labelWithCurrencyKey="orders.swapToWithCurrency"
+                      currency={toCurrency}
+                      t={t}
+                    />
+                  )}
+                  {(line.kind === "profit" ||
+                    (!isLedgerSwap && (line.fundedFrom ?? "cash") === "cash") ||
+                    (line.kind === "service_charge" && (line.fundedFrom ?? "cash") === "cash")) && (
                     <div className="min-w-[240px] flex-[1_1_240px] [&_input]:py-1.5 [&_input]:text-sm">
                       <AccountSelect
                         value={line.accountId}

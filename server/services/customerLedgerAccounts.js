@@ -1,5 +1,8 @@
 import { db } from "../db.js";
 
+/** Funding balance checks allow small display-rounding slack (2-decimal UI vs 4-decimal ledger). */
+const FUNDING_BALANCE_TOLERANCE = 0.01;
+
 export function getCustomerCurrencyBalance(customerId, currencyCode) {
   const row = db
     .prepare(
@@ -194,9 +197,84 @@ function balanceMapKey(customerId, currencyCode) {
   return `${customerId}:${currencyCode}`;
 }
 
-/** Effective funded balance per manual-ledger currency (same rules as getEffectiveFundedBalance). */
+/** Distinct customer/currency pairs that can have a non-manual funding balance (e.g. ledger swap credits). */
+export function fetchDistinctFundingCurrencies(customerId = null) {
+  const manualSql = customerId
+    ? `SELECT customerId, currencyCode
+       FROM customer_ledger_entries
+       WHERE customerId = ? AND deletedAt IS NULL AND source = 'manual'
+       GROUP BY customerId, currencyCode`
+    : `SELECT customerId, currencyCode
+       FROM customer_ledger_entries
+       WHERE deletedAt IS NULL AND source = 'manual'
+       GROUP BY customerId, currencyCode`;
+
+  const receiptSql = customerId
+    ? `SELECT o.customerId, o.fromCurrency AS currencyCode
+       FROM order_receipts r
+       INNER JOIN orders o ON o.id = r.orderId
+       WHERE o.customerId = ?
+         AND r.fundedFrom = 'customer_balance'
+         AND r.status = 'confirmed'
+         AND o.status = 'completed'
+       GROUP BY o.customerId, o.fromCurrency`
+    : `SELECT o.customerId, o.fromCurrency AS currencyCode
+       FROM order_receipts r
+       INNER JOIN orders o ON o.id = r.orderId
+       WHERE r.fundedFrom = 'customer_balance'
+         AND r.status = 'confirmed'
+         AND o.status = 'completed'
+       GROUP BY o.customerId, o.fromCurrency`;
+
+  const paymentSql = customerId
+    ? `SELECT o.customerId, o.toCurrency AS currencyCode
+       FROM order_payments p
+       INNER JOIN orders o ON o.id = p.orderId
+       WHERE o.customerId = ?
+         AND p.fundedFrom = 'customer_balance'
+         AND p.status = 'confirmed'
+         AND o.status = 'completed'
+       GROUP BY o.customerId, o.toCurrency`
+    : `SELECT o.customerId, o.toCurrency AS currencyCode
+       FROM order_payments p
+       INNER JOIN orders o ON o.id = p.orderId
+       WHERE p.fundedFrom = 'customer_balance'
+         AND p.status = 'confirmed'
+         AND o.status = 'completed'
+       GROUP BY o.customerId, o.toCurrency`;
+
+  const params = customerId != null ? [customerId] : [];
+  const rows = [
+    ...db.prepare(manualSql).all(...params),
+    ...db.prepare(receiptSql).all(...params),
+    ...db.prepare(paymentSql).all(...params),
+  ];
+
+  const seen = new Set();
+  const result = [];
+  for (const row of rows) {
+    const key = balanceMapKey(row.customerId, row.currencyCode);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push({ customerId: row.customerId, currencyCode: row.currencyCode });
+  }
+
+  result.sort((a, b) =>
+    a.customerId !== b.customerId
+      ? a.customerId - b.customerId
+      : a.currencyCode.localeCompare(b.currencyCode),
+  );
+  return result;
+}
+
+/** Effective funded balance per funding currency (same rules as getEffectiveFundedBalance). */
 export function buildEffectiveFundedBalanceByCustomerCurrency() {
-  const manualRows = fetchManualFundedBalancesGrouped();
+  const manualByKey = new Map(
+    fetchManualFundedBalancesGrouped().map((r) => [
+      balanceMapKey(r.customerId, r.currencyCode),
+      Number(r.balance ?? 0),
+    ]),
+  );
   const receiptByKey = new Map(
     fetchConsumedPrepaidReceiptsGrouped().map((r) => [
       balanceMapKey(r.customerId, r.currencyCode),
@@ -210,16 +288,23 @@ export function buildEffectiveFundedBalanceByCustomerCurrency() {
     ]),
   );
 
+  const allKeys = new Set([
+    ...manualByKey.keys(),
+    ...receiptByKey.keys(),
+    ...paymentByKey.keys(),
+  ]);
+
   const byCustomer = {};
-  for (const row of manualRows) {
-    const key = balanceMapKey(row.customerId, row.currencyCode);
+  for (const key of allKeys) {
+    const [customerIdStr, currencyCode] = key.split(":");
+    const customerId = parseInt(customerIdStr, 10);
     const effective =
-      Number(row.balance ?? 0) - (receiptByKey.get(key) ?? 0) + (paymentByKey.get(key) ?? 0);
-    if (!byCustomer[row.customerId]) {
-      byCustomer[row.customerId] = [];
+      (manualByKey.get(key) ?? 0) - (receiptByKey.get(key) ?? 0) + (paymentByKey.get(key) ?? 0);
+    if (!byCustomer[customerId]) {
+      byCustomer[customerId] = [];
     }
-    byCustomer[row.customerId].push({
-      currencyCode: row.currencyCode,
+    byCustomer[customerId].push({
+      currencyCode,
       fundedBalance: effective,
     });
   }
@@ -261,7 +346,7 @@ export function assertAllocatableBalance(
     excludeReceiptId,
     excludeServiceChargeId,
   );
-  if (amount > available + 1e-9) {
+  if (amount > available + FUNDING_BALANCE_TOLERANCE) {
     const err = new Error(
       `Insufficient customer prepaid balance. Available: ${available.toFixed(2)} ${currencyCode}`,
     );
@@ -280,7 +365,7 @@ export function getAllocatableCustomerOwed(customerId, currencyCode, excludePaym
 
 export function assertAllocatableOwed(customerId, currencyCode, amount, excludePaymentId = null) {
   const available = getAllocatableCustomerOwed(customerId, currencyCode, excludePaymentId);
-  if (amount > available + 1e-9) {
+  if (amount > available + FUNDING_BALANCE_TOLERANCE) {
     const err = new Error(
       `Insufficient customer advance to settle. Available: ${available.toFixed(2)} ${currencyCode}`,
     );

@@ -1,5 +1,6 @@
 import * as XLSX from "xlsx";
 import type { OrderQueryParams } from "../../types/orders";
+import { formatOrderAccountsColumn } from "./orderAccounts";
 
 /**
  * Exports orders to Excel file
@@ -17,10 +18,7 @@ export async function exportOrdersToExcel(
   if (queryParams.fromCurrency) queryString.append("fromCurrency", queryParams.fromCurrency);
   if (queryParams.toCurrency) queryString.append("toCurrency", queryParams.toCurrency);
   if (queryParams.currencyPairs) queryString.append("currencyPairs", queryParams.currencyPairs);
-  if (queryParams.accountId !== undefined) queryString.append("accountId", queryParams.accountId.toString());
-  if (queryParams.accountRole && queryParams.accountRole !== "any") {
-    queryString.append("accountRole", queryParams.accountRole);
-  }
+  if (queryParams.accountSearch) queryString.append("accountSearch", queryParams.accountSearch);
   if (queryParams.status) queryString.append("status", queryParams.status);
   if (queryParams.tagIds) queryString.append("tagIds", queryParams.tagIds);
 
@@ -45,10 +43,18 @@ export async function exportOrdersToExcel(
     "Rate": order.rate,
     "Amount Buy": order.amountBuy,
     "From Currency": order.fromCurrency,
-    "Buy Account": order.buyAccountName || "-",
+    "Buy Account": formatOrderAccountsColumn(
+      order.buyAccounts,
+      t("orders.cof"),
+      order.buyAccountName,
+    ),
     "Amount Sell": order.amountSell,
     "To Currency": order.toCurrency,
-    "Sell Account": order.sellAccountName || "-",
+    "Sell Account": formatOrderAccountsColumn(
+      order.sellAccounts,
+      t("orders.cof"),
+      order.sellAccountName,
+    ),
     "Status": order.status,
     "Profit Amount": order.profitAmount || 0,
     "Profit Currency": order.profitCurrency || "-",

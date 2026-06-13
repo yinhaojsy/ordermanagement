@@ -1,5 +1,4 @@
-import { useState, type FormEvent } from "react";
-import { useEffect } from "react";
+import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import * as XLSX from "xlsx";
@@ -9,13 +8,9 @@ import ConfirmModal from "../components/common/ConfirmModal";
 import {
   useGetCustomerOptionsQuery,
   useGetCurrenciesQuery,
-  useGetAccountsQuery,
   useGetCustomerLedgerEntriesQuery,
   useGetCustomerLedgerSummaryQuery,
   useGetCustomerFundingBalancesQuery,
-  useGetCustomerTradeProfitLossQuery,
-  useCreateLedgerEntryMutation,
-  useUpdateLedgerEntryMutation,
   useDeleteLedgerEntryMutation,
   useGetLedgerEntryChangesQuery,
 } from "../services/api";
@@ -27,9 +22,9 @@ import {
   canViewCustomerLedger,
 } from "../utils/customerPermissions";
 import { CustomerAccountStatementPanel } from "../components/customers/CustomerAccountStatementPanel";
+import { CustomerDepositAccountStatementPanel } from "../components/customers/CustomerDepositAccountStatementPanel";
 import { CustomerFundingBalancesPanel } from "../components/customers/CustomerFundingBalancesPanel";
-import { CustomerLedgerBalancesPanel } from "../components/customers/CustomerLedgerBalancesPanel";
-import { AccountSelect } from "../components/common/AccountSelect";
+import { CustomerLedgerEntryFormModal } from "../components/customers/CustomerLedgerEntryFormModal";
 
 const fmt = (n: number) =>
   n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -81,195 +76,6 @@ function EntryChangeHistory({ entryId }: { entryId: number }) {
 }
 
 // ──────────────────────────────────────────────────────────
-// Entry form modal
-// ──────────────────────────────────────────────────────────
-interface EntryFormProps {
-  customerId: number;
-  initialType?: "credit" | "debit";
-  editing?: CustomerLedgerEntry | null;
-  currencies: Array<{ code: string; name: string; active: boolean | number }>;
-  onClose: () => void;
-  onError: (msg: string) => void;
-}
-
-function EntryFormModal({ customerId, initialType = "credit", editing, currencies, onClose, onError }: EntryFormProps) {
-  const { t } = useTranslation();
-  const [createEntry, { isLoading: isCreating }] = useCreateLedgerEntryMutation();
-  const [updateEntry, { isLoading: isUpdating }] = useUpdateLedgerEntryMutation();
-  const { data: accounts = [] } = useGetAccountsQuery();
-  const isManualEntry = !editing || editing.source === "manual" || !editing.source;
-
-  const [form, setForm] = useState({
-    type: editing?.type ?? initialType,
-    amount: editing ? String(editing.amount) : "",
-    currencyCode: editing?.currencyCode ?? "",
-    accountId: editing?.accountId ? String(editing.accountId) : "",
-    description: editing?.description ?? "",
-    entryDate: editing?.entryDate
-      ? new Date(editing.entryDate).toISOString().slice(0, 10)
-      : new Date().toISOString().slice(0, 10),
-  });
-
-  const activeCurrencies = currencies.filter((c) => c.active);
-
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    const amount = parseFloat(form.amount);
-    const accountId = parseInt(form.accountId, 10);
-    if (!form.currencyCode) { onError(t("customerLedger.selectCurrency")); return; }
-    if (!accountId) { onError(t("customerLedger.selectAccount")); return; }
-    if (!amount || amount <= 0) { onError("Amount must be a positive number."); return; }
-
-    try {
-      if (editing) {
-        if (!isManualEntry) {
-          onError(t("customerLedger.saveFailed"));
-          return;
-        }
-        await updateEntry({
-          customerId,
-          entryId: editing.id,
-          data: {
-            type: form.type,
-            amount,
-            currencyCode: form.currencyCode,
-            accountId,
-            description: form.description || undefined,
-            entryDate: form.entryDate || null,
-          },
-        }).unwrap();
-      } else {
-        await createEntry({
-          customerId,
-          type: form.type,
-          amount,
-          currencyCode: form.currencyCode,
-          accountId,
-          description: form.description || undefined,
-          entryDate: form.entryDate || null,
-        }).unwrap();
-      }
-      onClose();
-    } catch (err: any) {
-      onError(err?.data?.message || t("customerLedger.saveFailed"));
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
-      <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
-        <h3 className="text-lg font-semibold text-slate-900 mb-4">
-          {editing ? t("customerLedger.editEntry") : form.type === "credit" ? t("customerLedger.addCredit") : t("customerLedger.addDebit")}
-        </h3>
-        <form onSubmit={handleSubmit} className="grid gap-3">
-          {/* Type toggle */}
-          <div className="flex gap-2">
-            {(["credit", "debit"] as const).map((tp) => (
-              <button
-                key={tp}
-                type="button"
-                onClick={() => setForm((p) => ({ ...p, type: tp }))}
-                className={`flex-1 rounded-lg border py-2 text-sm font-semibold transition-colors ${
-                  form.type === tp
-                    ? tp === "credit"
-                      ? "border-emerald-500 bg-emerald-50 text-emerald-700"
-                      : "border-rose-500 bg-rose-50 text-rose-700"
-                    : "border-slate-200 text-slate-500 hover:bg-slate-50"
-                }`}
-              >
-                {tp === "credit" ? t("customerLedger.credit") : t("customerLedger.debit")}
-              </button>
-            ))}
-          </div>
-
-          {/* Currency */}
-          <select
-            value={form.currencyCode}
-            onChange={(e) =>
-              setForm((p) => ({ ...p, currencyCode: e.target.value, accountId: "" }))
-            }
-            className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
-            required
-            disabled={!!editing}
-          >
-            <option value="">{t("customerLedger.selectCurrency")}</option>
-            {activeCurrencies.map((c) => (
-              <option key={c.code} value={c.code}>
-                {c.code} — {c.name}
-              </option>
-            ))}
-          </select>
-
-          <AccountSelect
-            value={form.accountId}
-            onChange={(accountId) => setForm((p) => ({ ...p, accountId }))}
-            accounts={accounts}
-            label={t("customerLedger.selectAccount")}
-            placeholder={t("customerLedger.selectAccount")}
-            required
-            disabled={!form.currencyCode || (!isManualEntry && !!editing)}
-            filterByCurrency={form.currencyCode || undefined}
-            showBalance
-            t={t}
-          />
-
-          {/* Amount */}
-          <input
-            type="number"
-            min="0.01"
-            step="any"
-            placeholder={t("customerLedger.amountPlaceholder")}
-            value={form.amount}
-            onChange={(e) => setForm((p) => ({ ...p, amount: e.target.value }))}
-            className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
-            required
-          />
-
-          {/* Description */}
-          <input
-            type="text"
-            placeholder={t("customerLedger.descriptionPlaceholder")}
-            value={form.description}
-            onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))}
-            className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
-          />
-
-          {/* Entry date */}
-          <div>
-            <label className="block text-xs font-medium text-slate-500 mb-1">{t("customerLedger.entryDate")}</label>
-            <input
-              type="date"
-              value={form.entryDate}
-              onChange={(e) => setForm((p) => ({ ...p, entryDate: e.target.value }))}
-              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
-            />
-          </div>
-
-          <div className="flex gap-3 mt-1">
-            <button
-              type="button"
-              onClick={onClose}
-              className="flex-1 rounded-lg border border-slate-300 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-            >
-              {t("common.cancel")}
-            </button>
-            <button
-              type="submit"
-              disabled={isCreating || isUpdating}
-              className={`flex-1 rounded-lg py-2 text-sm font-semibold text-white shadow transition-colors disabled:opacity-60 ${
-                form.type === "credit" ? "bg-emerald-600 hover:bg-emerald-700" : "bg-rose-600 hover:bg-rose-700"
-              }`}
-            >
-              {isCreating || isUpdating ? t("common.saving") : t("common.save")}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-}
-
-// ──────────────────────────────────────────────────────────
 // Main page
 // ──────────────────────────────────────────────────────────
 export default function CustomerLedgerPage() {
@@ -297,8 +103,6 @@ export default function CustomerLedgerPage() {
   const { data: summary = [] } = useGetCustomerLedgerSummaryQuery(customerId);
   const { data: fundingBalances, isLoading: fundingBalancesLoading } =
     useGetCustomerFundingBalancesQuery(customerId);
-  const { data: tradeProfit, isLoading: tradeProfitLoading } =
-    useGetCustomerTradeProfitLossQuery(customerId);
   const { data: entries = [], isLoading } = useGetCustomerLedgerEntriesQuery({ customerId });
   const [deleteEntry] = useDeleteLedgerEntryMutation();
 
@@ -316,8 +120,7 @@ export default function CustomerLedgerPage() {
   const [confirmModal, setConfirmModal] = useState<{ isOpen: boolean; entryId: number | null }>({
     isOpen: false, entryId: null,
   });
-  const [balanceTab, setBalanceTab] = useState<"funding" | "ledger">("funding");
-  const [mainTab, setMainTab] = useState<"currency" | "account">("currency");
+  const [mainTab, setMainTab] = useState<"currency" | "tradeRecord" | "accountStatement">("currency");
 
   // Derive active currency tabs (currencies with entries)
   const activeCurrencyTabs = summary.map((s) => s.currencyCode);
@@ -436,50 +239,13 @@ export default function CustomerLedgerPage() {
         ) : null}
       </div>
 
-      <div className="flex gap-1 border-b border-slate-200">
-        <button
-          type="button"
-          onClick={() => setBalanceTab("funding")}
-          className={`px-4 py-2 text-sm font-semibold border-b-2 transition-colors ${
-            balanceTab === "funding"
-              ? "border-blue-500 text-blue-700"
-              : "border-transparent text-slate-500 hover:text-slate-800"
-          }`}
-        >
-          {t("customerLedger.balanceTabFunding")}
-        </button>
-        <button
-          type="button"
-          onClick={() => setBalanceTab("ledger")}
-          className={`px-4 py-2 text-sm font-semibold border-b-2 transition-colors ${
-            balanceTab === "ledger"
-              ? "border-blue-500 text-blue-700"
-              : "border-transparent text-slate-500 hover:text-slate-800"
-          }`}
-        >
-          {t("customerLedger.balanceTabLedger")}
-        </button>
-      </div>
-
-      {balanceTab === "funding" && (
-        <CustomerFundingBalancesPanel
-          data={fundingBalances}
-          isLoading={fundingBalancesLoading}
-        />
-      )}
-
-      {balanceTab === "ledger" && (
-        <CustomerLedgerBalancesPanel
-          summary={summary}
-          tradeProfit={tradeProfit}
-          isLoading={tradeProfitLoading}
-          selectedCurrency={selectedCurrency}
-          onSelectCurrency={(code) => {
-            setActiveCurrency(code);
-            setMainTab("currency");
-          }}
-        />
-      )}
+      <h2 className="text-lg font-semibold text-slate-800 mb-3">
+        {t("customerLedger.balanceOverview")}
+      </h2>
+      <CustomerFundingBalancesPanel
+        data={fundingBalances}
+        isLoading={fundingBalancesLoading}
+      />
 
       <div className="flex gap-1 border-b border-slate-200 pt-2">
         <button
@@ -495,23 +261,41 @@ export default function CustomerLedgerPage() {
         </button>
         <button
           type="button"
-          onClick={() => setMainTab("account")}
+          onClick={() => setMainTab("tradeRecord")}
           className={`px-4 py-2 text-sm font-semibold border-b-2 transition-colors ${
-            mainTab === "account"
+            mainTab === "tradeRecord"
               ? "border-blue-500 text-blue-700"
               : "border-transparent text-slate-500 hover:text-slate-800"
           }`}
         >
-          {t("customerLedger.accountStatement")}
+          {t("customerLedger.tradeRecord")}
+        </button>
+        <button
+          type="button"
+          onClick={() => setMainTab("accountStatement")}
+          className={`px-4 py-2 text-sm font-semibold border-b-2 transition-colors ${
+            mainTab === "accountStatement"
+              ? "border-blue-500 text-blue-700"
+              : "border-transparent text-slate-500 hover:text-slate-800"
+          }`}
+        >
+          {t("customerLedger.depositAccountStatement")}
         </button>
       </div>
 
-      {mainTab === "account" && (
+      {mainTab === "tradeRecord" && (
         <CustomerAccountStatementPanel
           customerId={customerId}
           customerName={customer?.name}
           canWrite={canEditDeleteLedger}
           onAlert={(message, type) => setAlertModal({ isOpen: true, message, type: type || "error" })}
+        />
+      )}
+
+      {mainTab === "accountStatement" && (
+        <CustomerDepositAccountStatementPanel
+          customerId={customerId}
+          customerName={customer?.name}
         />
       )}
 
@@ -698,7 +482,7 @@ export default function CustomerLedgerPage() {
       {/* Entry form modal */}
       {entryModal.open &&
         (canDepositWithdraw || (entryModal.editing && canEditDeleteLedger)) && (
-        <EntryFormModal
+        <CustomerLedgerEntryFormModal
           customerId={customerId}
           initialType={entryModal.type}
           editing={entryModal.editing}

@@ -1,6 +1,6 @@
-import { db } from "../db.js";
 import {
   buildEffectiveFundedBalanceByCustomerCurrency,
+  fetchDistinctFundingCurrencies,
   getAllocatableCustomerBalance,
   getAllocatableCustomerOwed,
   getEffectiveFundedBalance,
@@ -8,28 +8,6 @@ import {
 import { getDefaultProfitConversion } from "./profitConversion.js";
 
 const FUNDING_EPSILON = 0.005;
-
-function distinctManualCurrencies(customerId = null) {
-  if (customerId != null) {
-    return db
-      .prepare(
-        `SELECT DISTINCT currencyCode
-         FROM customer_ledger_entries
-         WHERE customerId = ? AND deletedAt IS NULL AND source = 'manual'
-         ORDER BY currencyCode ASC;`,
-      )
-      .all(customerId);
-  }
-
-  return db
-    .prepare(
-      `SELECT DISTINCT customerId, currencyCode
-       FROM customer_ledger_entries
-       WHERE deletedAt IS NULL AND source = 'manual'
-       ORDER BY customerId ASC, currencyCode ASC;`,
-    )
-    .all();
-}
 
 /**
  * Sum effective funding balances into target currency (same as Funding tab Total Balance).
@@ -73,7 +51,7 @@ export function aggregateFundingTotal(positions) {
 
 /** Per-currency funding + total converted (customer ledger Funding tab). */
 export function getCustomerFundingBalances(customerId) {
-  const currencyRows = distinctManualCurrencies(customerId);
+  const currencyRows = fetchDistinctFundingCurrencies(customerId);
   const { targetCurrency, convertToTarget } = getDefaultProfitConversion();
 
   const positions = currencyRows.map(({ currencyCode }) => ({

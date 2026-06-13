@@ -19,6 +19,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import StatCard from "../components/common/StatCard";
+import { CustomerDepositDashboardCard } from "../components/customerDeposits/CustomerDepositPoolsSection";
 import {
   useGetAccountsQuery,
   useGetCurrenciesQuery,
@@ -27,6 +28,7 @@ import {
   useGetUsersQuery,
   useGetProfitCalculationsQuery,
   useGetProfitCalculationQuery,
+  useGetCustomerDepositTotalsByCurrencyQuery,
 } from "../services/api";
 import { useProfitSummary } from "../hooks/useProfitSummary";
 import type { Account } from "../types";
@@ -271,7 +273,13 @@ export default function DashboardPage() {
     defaultCalculation?.id || 0,
     { skip: !defaultCalculation }
   );
-  const profitSummary = useProfitSummary(defaultCalculationDetails, fetchedAccounts, currencies);
+  const { data: depositTotalsData } = useGetCustomerDepositTotalsByCurrencyQuery();
+  const profitSummary = useProfitSummary(
+    defaultCalculationDetails,
+    fetchedAccounts,
+    currencies,
+    depositTotalsData?.currencies ?? [],
+  );
 
   // localStorage keys scoped to the logged-in user
   const poolOrderKey = `dashboard_pool_order_${userId}`;
@@ -390,7 +398,7 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      <div className="grid gap-4 grid-cols-2 lg:grid-cols-5">
+      <div className="grid gap-4 grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         <StatCard
           label={t("dashboard.totalOrders")}
           value={stats.orders}
@@ -439,7 +447,7 @@ export default function DashboardPage() {
           >
             <div className="text-sm text-slate-600">{t("dashboard.totalProfit")}</div>
             <div
-              className={`mt-2 text-2xl font-semibold leading-tight ${
+              className={`mt-1.5 text-xl font-semibold tabular-nums leading-tight ${
                 profitSummary.totalProfit > 0
                   ? "text-emerald-600"
                   : profitSummary.totalProfit < 0
@@ -459,9 +467,10 @@ export default function DashboardPage() {
         ) : (
           <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
             <div className="text-sm text-slate-600">{t("dashboard.totalProfit")}</div>
-            <div className="mt-2 text-2xl font-semibold text-slate-300">—</div>
+            <div className="mt-1.5 text-xl font-semibold text-slate-300">—</div>
           </div>
         )}
+        <CustomerDepositDashboardCard />
       </div>
 
       {orderedPools.length > 0 && (
