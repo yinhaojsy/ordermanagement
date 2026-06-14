@@ -5,8 +5,8 @@ import { CustomerDepositTotalCard } from "./CustomerDepositTotalCard";
 import { CustomerDepositSidebarContent } from "./CustomerDepositSidebarContent";
 import { RightSidebar } from "./RightSidebar";
 import { useCustomerDepositUi } from "./useCustomerDepositUi";
-const fmt = (n: number) =>
-  n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtDashboard = (n: number) =>
+  n.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 
 interface Props {
   variant: "detailed" | "compact";
@@ -167,7 +167,7 @@ export function CustomerDepositDashboardCard() {
       >
         <div className="text-sm text-indigo-800">{t("profit.totalCustomerDeposit")}</div>
         <div className="mt-1.5 text-xl font-semibold tabular-nums leading-tight text-indigo-950">
-          {fmt(totalConverted)}
+          {fmtDashboard(totalConverted)}
           <span className="ml-1 text-sm font-medium text-indigo-700">{targetCurrency}</span>
           {data.hasUnknownRate ? (
             <span className="ml-1 text-sm font-medium text-amber-600">*</span>

@@ -456,8 +456,8 @@ export default function DashboardPage() {
               }`}
             >
               {profitSummary.totalProfit.toLocaleString("en-US", {
-                minimumFractionDigits: 2,
-                maximumFractionDigits: 2,
+                minimumFractionDigits: 0,
+                maximumFractionDigits: 0,
               })}
               <span className="ml-1 text-sm font-medium text-slate-500">
                 {profitSummary.targetCurrency}
