@@ -563,6 +563,115 @@ function computeCalculatedProfit(order, serviceChargeEntries, profitTargetCurren
   return Number.isFinite(result) ? result : null;
 }
 
+/**
+ * Resolve profit / service-charge amounts from order_profits / order_service_charges
+ * (source of truth for unified-modal orders), with legacy orders.* column fallback.
+ */
+function resolveOrderProfitAndServiceCharges(order, { includeDraftFallback = true } = {}) {
+  const confirmedProfitRows = db
+    .prepare(
+      `SELECT SUM(amount) as total, currencyCode
+       FROM order_profits
+       WHERE orderId = ? AND status = 'confirmed'
+       GROUP BY currencyCode
+       ORDER BY MIN(createdAt) ASC;`,
+    )
+    .all(order.id);
+
+  const profitRows =
+    confirmedProfitRows.length > 0 || !includeDraftFallback
+      ? confirmedProfitRows
+      : db
+          .prepare(
+            `SELECT SUM(amount) as total, currencyCode
+             FROM order_profits
+             WHERE orderId = ? AND status = 'draft'
+             GROUP BY currencyCode
+             ORDER BY MIN(createdAt) ASC;`,
+          )
+          .all(order.id);
+
+  const confirmedScRows = db
+    .prepare(
+      `SELECT SUM(amount) as total, currencyCode
+       FROM order_service_charges
+       WHERE orderId = ? AND status = 'confirmed'
+       GROUP BY currencyCode
+       ORDER BY MIN(createdAt) ASC;`,
+    )
+    .all(order.id);
+
+  const scRows =
+    confirmedScRows.length > 0 || !includeDraftFallback
+      ? confirmedScRows
+      : db
+          .prepare(
+            `SELECT SUM(amount) as total, currencyCode
+             FROM order_service_charges
+             WHERE orderId = ? AND status = 'draft'
+             GROUP BY currencyCode
+             ORDER BY MIN(createdAt) ASC;`,
+          )
+          .all(order.id);
+
+  const profitEntries = profitRows.map((r) => ({ amount: Number(r.total), currency: r.currencyCode }));
+  const serviceChargeEntries = scRows.map((r) => ({ amount: Number(r.total), currency: r.currencyCode }));
+
+  const firstProfitEntry =
+    profitRows.length > 0
+      ? db
+          .prepare(
+            `SELECT accountId FROM order_profits
+             WHERE orderId = ? AND status IN ('confirmed','draft')
+             ORDER BY CASE status WHEN 'confirmed' THEN 0 ELSE 1 END, createdAt ASC LIMIT 1;`,
+          )
+          .get(order.id)
+      : null;
+  const firstScEntry =
+    scRows.length > 0
+      ? db
+          .prepare(
+            `SELECT accountId FROM order_service_charges
+             WHERE orderId = ? AND status IN ('confirmed','draft')
+             ORDER BY CASE status WHEN 'confirmed' THEN 0 ELSE 1 END, createdAt ASC LIMIT 1;`,
+          )
+          .get(order.id)
+      : null;
+
+  const profitAmount =
+    profitEntries.length > 0
+      ? profitEntries[0].amount
+      : order.profitAmount !== null && order.profitAmount !== undefined
+        ? Number(order.profitAmount)
+        : null;
+  const profitCurrency =
+    profitEntries.length > 0 ? profitEntries[0].currency : (order.profitCurrency ?? null);
+  const profitAccountId = order.profitAccountId ?? firstProfitEntry?.accountId ?? null;
+
+  const serviceChargeAmount =
+    serviceChargeEntries.length > 0
+      ? serviceChargeEntries[0].amount
+      : order.serviceChargeAmount !== null && order.serviceChargeAmount !== undefined
+        ? Number(order.serviceChargeAmount)
+        : null;
+  const serviceChargeCurrency =
+    serviceChargeEntries.length > 0
+      ? serviceChargeEntries[0].currency
+      : (order.serviceChargeCurrency ?? null);
+  const serviceChargeAccountId = order.serviceChargeAccountId ?? firstScEntry?.accountId ?? null;
+
+  return {
+    profitEntries,
+    serviceChargeEntries,
+    profitAmount,
+    profitCurrency,
+    profitAccountId,
+    serviceChargeAmount,
+    serviceChargeCurrency,
+    serviceChargeAccountId,
+  };
+}
+
 export const listOrders = (req, res) => {
   // Extract query parameters
   const {
@@ -800,76 +909,14 @@ export const listOrders = (req, res) => {
         )
         .all(order.id);
 
-      // Sum all confirmed profits per currency; fall back to drafts if no confirmed entries
-      const confirmedProfitRows = db
-        .prepare(
-          `SELECT SUM(amount) as total, currencyCode
-           FROM order_profits
-           WHERE orderId = ? AND status = 'confirmed'
-           GROUP BY currencyCode
-           ORDER BY MIN(createdAt) ASC;`
-        )
-        .all(order.id);
-
-      const profitRows = confirmedProfitRows.length > 0 ? confirmedProfitRows : db
-        .prepare(
-          `SELECT SUM(amount) as total, currencyCode
-           FROM order_profits
-           WHERE orderId = ? AND status = 'draft'
-           GROUP BY currencyCode
-           ORDER BY MIN(createdAt) ASC;`
-        )
-        .all(order.id);
-
-      // Sum all confirmed service charges per currency; fall back to drafts if none
-      const confirmedScRows = db
-        .prepare(
-          `SELECT SUM(amount) as total, currencyCode
-           FROM order_service_charges
-           WHERE orderId = ? AND status = 'confirmed'
-           GROUP BY currencyCode
-           ORDER BY MIN(createdAt) ASC;`
-        )
-        .all(order.id);
-
-      const scRows = confirmedScRows.length > 0 ? confirmedScRows : db
-        .prepare(
-          `SELECT SUM(amount) as total, currencyCode
-           FROM order_service_charges
-           WHERE orderId = ? AND status = 'draft'
-           GROUP BY currencyCode
-           ORDER BY MIN(createdAt) ASC;`
-        )
-        .all(order.id);
-
-      // Build entries arrays for the table display
-      const profitEntries = profitRows.map(r => ({ amount: Number(r.total), currency: r.currencyCode }));
-      const serviceChargeEntries = scRows.map(r => ({ amount: Number(r.total), currency: r.currencyCode }));
+      const profitAndCharges = resolveOrderProfitAndServiceCharges(order);
 
       const calculatedProfit = computeCalculatedProfit(
         order,
-        serviceChargeEntries,
+        profitAndCharges.serviceChargeEntries,
         profitTargetCurrency,
         calcConvertToTarget,
       );
-
-      // Resolve accountId from order_profits/order_service_charges as a fallback for unified-modal orders
-      // (legacy orders.profitAccountId is null for those; the table entry is the source of truth)
-      const firstProfitEntry = profitRows.length > 0
-        ? db.prepare(`SELECT accountId FROM order_profits WHERE orderId = ? AND status IN ('confirmed','draft') ORDER BY CASE status WHEN 'confirmed' THEN 0 ELSE 1 END, createdAt ASC LIMIT 1;`).get(order.id)
-        : null;
-      const firstScEntry = scRows.length > 0
-        ? db.prepare(`SELECT accountId FROM order_service_charges WHERE orderId = ? AND status IN ('confirmed','draft') ORDER BY CASE status WHEN 'confirmed' THEN 0 ELSE 1 END, createdAt ASC LIMIT 1;`).get(order.id)
-        : null;
-
-      // Scalar backward-compat fields: use first entry (or legacy order table fallback)
-      const profitAmount = profitEntries.length > 0 ? profitEntries[0].amount : (order.profitAmount !== null && order.profitAmount !== undefined ? Number(order.profitAmount) : null);
-      const profitCurrency = profitEntries.length > 0 ? profitEntries[0].currency : (order.profitCurrency ?? null);
-      const profitAccountId = order.profitAccountId ?? firstProfitEntry?.accountId ?? null;
-
-      const serviceChargeAmount = serviceChargeEntries.length > 0 ? serviceChargeEntries[0].amount : (order.serviceChargeAmount !== null && order.serviceChargeAmount !== undefined ? Number(order.serviceChargeAmount) : null);
-      const serviceChargeCurrency = serviceChargeEntries.length > 0 ? serviceChargeEntries[0].currency : (order.serviceChargeCurrency ?? null);
-      const serviceChargeAccountId = order.serviceChargeAccountId ?? firstScEntry?.accountId ?? null;
 
       return {
         ...order,
@@ -881,14 +928,7 @@ export const listOrders = (req, res) => {
         buyAccounts: buyAccounts.length > 0 ? buyAccounts : null,
         sellAccounts: sellAccounts.length > 0 ? sellAccounts : null,
         tags: tags.length > 0 ? tags : [],
-        profitEntries,
-        serviceChargeEntries,
-        profitAmount,
-        profitCurrency,
-        profitAccountId,
-        serviceChargeAmount,
-        serviceChargeCurrency,
-        serviceChargeAccountId,
+        ...profitAndCharges,
         calculatedProfit,
         calculatedProfitCurrency: profitTargetCurrency,
       };
@@ -904,48 +944,13 @@ export const listOrders = (req, res) => {
         )
         .all(order.id);
 
-      // Get confirmed profit/service charge sums per currency even in error case
-      const confirmedProfitRows = db
-        .prepare(
-          `SELECT SUM(amount) as total, currencyCode
-           FROM order_profits
-           WHERE orderId = ? AND status = 'confirmed'
-           GROUP BY currencyCode
-           ORDER BY MIN(createdAt) ASC;`
-        )
-        .all(order.id);
-
-      const confirmedScRows = db
-        .prepare(
-          `SELECT SUM(amount) as total, currencyCode
-           FROM order_service_charges
-           WHERE orderId = ? AND status = 'confirmed'
-           GROUP BY currencyCode
-           ORDER BY MIN(createdAt) ASC;`
-        )
-        .all(order.id);
-
-      const profitEntries = confirmedProfitRows.map(r => ({ amount: Number(r.total), currency: r.currencyCode }));
-      const serviceChargeEntries = confirmedScRows.map(r => ({ amount: Number(r.total), currency: r.currencyCode }));
-
-      const firstProfitEntry = confirmedProfitRows.length > 0
-        ? db.prepare(`SELECT accountId FROM order_profits WHERE orderId = ? AND status = 'confirmed' ORDER BY createdAt ASC LIMIT 1;`).get(order.id)
-        : null;
-      const firstScEntry = confirmedScRows.length > 0
-        ? db.prepare(`SELECT accountId FROM order_service_charges WHERE orderId = ? AND status = 'confirmed' ORDER BY createdAt ASC LIMIT 1;`).get(order.id)
-        : null;
-
-      const profitAmount = profitEntries.length > 0 ? profitEntries[0].amount : (order.profitAmount !== null && order.profitAmount !== undefined ? Number(order.profitAmount) : null);
-      const profitCurrency = profitEntries.length > 0 ? profitEntries[0].currency : (order.profitCurrency ?? null);
-      const profitAccountId = order.profitAccountId ?? firstProfitEntry?.accountId ?? null;
-
-      const serviceChargeAmount = serviceChargeEntries.length > 0 ? serviceChargeEntries[0].amount : (order.serviceChargeAmount !== null && order.serviceChargeAmount !== undefined ? Number(order.serviceChargeAmount) : null);
-      const serviceChargeCurrency = serviceChargeEntries.length > 0 ? serviceChargeEntries[0].currency : (order.serviceChargeCurrency ?? null);
-      const serviceChargeAccountId = order.serviceChargeAccountId ?? firstScEntry?.accountId ?? null;
+      const profitAndCharges = resolveOrderProfitAndServiceCharges(order, {
+        includeDraftFallback: false,
+      });
 
       const calculatedProfit = computeCalculatedProfit(
         order,
-        serviceChargeEntries,
+        profitAndCharges.serviceChargeEntries,
         profitTargetCurrency,
         calcConvertToTarget,
       );
@@ -960,14 +965,7 @@ export const listOrders = (req, res) => {
         buyAccounts: null,
         sellAccounts: null,
         tags: tags.length > 0 ? tags : [],
-        profitEntries,
-        serviceChargeEntries,
-        profitAmount,
-        profitCurrency,
-        profitAccountId,
-        serviceChargeAmount,
-        serviceChargeCurrency,
-        serviceChargeAccountId,
+        ...profitAndCharges,
         calculatedProfit,
         calculatedProfitCurrency: profitTargetCurrency,
       };
@@ -1155,6 +1153,8 @@ export const exportOrders = (req, res) => {
         )
         .all(order.id);
 
+      const profitAndCharges = resolveOrderProfitAndServiceCharges(order);
+
       return {
         ...order,
         pinned,
@@ -1165,6 +1165,7 @@ export const exportOrders = (req, res) => {
         buyAccounts: buyAccounts.length > 0 ? buyAccounts : null,
         sellAccounts: sellAccounts.length > 0 ? sellAccounts : null,
         tags: tags.length > 0 ? tags : [],
+        ...profitAndCharges,
       };
     } catch (e) {
       // Get tags for this order even in error case
@@ -1178,6 +1179,10 @@ export const exportOrders = (req, res) => {
         )
         .all(order.id);
 
+      const profitAndCharges = resolveOrderProfitAndServiceCharges(order, {
+        includeDraftFallback: false,
+      });
+
       return {
         ...order,
         pinned,
@@ -1188,6 +1193,7 @@ export const exportOrders = (req, res) => {
         buyAccounts: null,
         sellAccounts: null,
         tags: tags.length > 0 ? tags : [],
+        ...profitAndCharges,
       };
     }
   });

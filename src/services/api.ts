@@ -22,6 +22,7 @@ import type {
   Account,
   AccountSummary,
   AccountTransaction,
+  AccountMonthlyStatistics,
   Transfer,
   TransferInput,
   TransferChange,
@@ -30,6 +31,13 @@ import type {
   ExpenseChange,
   ProfitCalculation,
   ProfitCalculationDetails,
+  DividendCalculationSummary,
+  DividendCalculationDetail,
+  DividendCalculationInput,
+  DividendPayInput,
+  DividendTemplateSummary,
+  DividendTemplateDetail,
+  DividendTemplateInput,
   CustomerDepositTotalsResponse,
   CustomerDepositByCurrencyResponse,
   CustomerDepositTraceEntry,
@@ -119,7 +127,7 @@ function customerLedgerTagsForCustomer(customerId: number) {
 export const api = createApi({
   reducerPath: "api",
   baseQuery,
-  tagTypes: ["Currency", "Customer", "CustomerBeneficiary", "CustomerLedger", "CustomerKyc", "User", "Role", "Order", "Auth", "Account", "Transfer", "Expense", "ProfitCalculation", "Setting", "PublicBranding", "Tag", "Notification", "Wallet", "ReferenceRates", "Integration", "AmlCheck"],
+  tagTypes: ["Currency", "Customer", "CustomerBeneficiary", "CustomerLedger", "CustomerKyc", "User", "Role", "Order", "Auth", "Account", "Transfer", "Expense", "ProfitCalculation", "Dividend", "DividendTemplate", "Setting", "PublicBranding", "Tag", "Notification", "Wallet", "ReferenceRates", "Integration", "AmlCheck"],
   refetchOnReconnect: true,
   endpoints: (builder) => ({
     getCurrencies: builder.query<Currency[], void>({
@@ -1482,6 +1490,118 @@ export const api = createApi({
       query: () => "accounts/summary",
       providesTags: [{ type: "Account", id: "LIST" }],
     }),
+    getAccountMonthlyStatistics: builder.query<
+      AccountMonthlyStatistics,
+      {
+        year: number;
+        month: number;
+        periodStartDay: number;
+        periodEndMode: "eom" | "day";
+        periodEndDay: number;
+        profitCalculationId?: number | null;
+      }
+    >({
+      query: ({ year, month, periodStartDay, periodEndMode, periodEndDay, profitCalculationId }) => {
+        const params = new URLSearchParams();
+        params.set("year", String(year));
+        params.set("month", String(month));
+        params.set("periodStartDay", String(periodStartDay));
+        params.set("periodEndMode", periodEndMode);
+        if (periodEndMode === "day") {
+          params.set("periodEndDay", String(periodEndDay));
+        }
+        if (profitCalculationId) {
+          params.set("profitCalculationId", String(profitCalculationId));
+        }
+        return `reports/account-monthly?${params.toString()}`;
+      },
+      providesTags: [{ type: "Account", id: "MONTHLY_STATS" }],
+    }),
+    getDividends: builder.query<DividendCalculationSummary[], void>({
+      query: () => "dividends",
+      providesTags: (result) =>
+        result
+          ? [
+              ...result.map(({ id }) => ({ type: "Dividend" as const, id })),
+              { type: "Dividend" as const, id: "LIST" },
+            ]
+          : [{ type: "Dividend" as const, id: "LIST" }],
+    }),
+    getDividend: builder.query<DividendCalculationDetail, number>({
+      query: (id) => `dividends/${id}`,
+      providesTags: (_r, _e, id) => [{ type: "Dividend", id }],
+    }),
+    createDividend: builder.mutation<DividendCalculationDetail, DividendCalculationInput>({
+      query: (body) => ({ url: "dividends", method: "POST", body }),
+      invalidatesTags: [{ type: "Dividend", id: "LIST" }],
+    }),
+    updateDividend: builder.mutation<
+      DividendCalculationDetail,
+      { id: number; data: DividendCalculationInput }
+    >({
+      query: ({ id, data }) => ({ url: `dividends/${id}`, method: "PUT", body: data }),
+      invalidatesTags: (_r, _e, { id }) => [
+        { type: "Dividend", id },
+        { type: "Dividend", id: "LIST" },
+      ],
+    }),
+    calculateDividend: builder.mutation<DividendCalculationDetail & { warnings?: string[] }, number>({
+      query: (id) => ({ url: `dividends/${id}/calculate`, method: "POST" }),
+      invalidatesTags: (_r, _e, id) => [
+        { type: "Dividend", id },
+        { type: "Dividend", id: "LIST" },
+      ],
+    }),
+    payDividend: builder.mutation<DividendCalculationDetail, { id: number; data: DividendPayInput }>({
+      query: ({ id, data }) => ({ url: `dividends/${id}/pay`, method: "POST", body: data }),
+      invalidatesTags: (_r, _e, { id }) => [
+        { type: "Dividend", id },
+        { type: "Dividend", id: "LIST" },
+        { type: "Account", id: "LIST" },
+      ],
+    }),
+    deleteDividend: builder.mutation<{ ok: boolean }, number>({
+      query: (id) => ({ url: `dividends/${id}`, method: "DELETE" }),
+      invalidatesTags: (_r, _e, id) => [
+        { type: "Dividend", id },
+        { type: "Dividend", id: "LIST" },
+      ],
+    }),
+    getDividendTemplates: builder.query<DividendTemplateSummary[], void>({
+      query: () => "dividend-templates",
+      providesTags: (result) =>
+        result
+          ? [
+              ...result.map(({ id }) => ({ type: "DividendTemplate" as const, id })),
+              { type: "DividendTemplate" as const, id: "LIST" },
+            ]
+          : [{ type: "DividendTemplate" as const, id: "LIST" }],
+    }),
+    getDividendTemplate: builder.query<DividendTemplateDetail, number>({
+      query: (id) => `dividend-templates/${id}`,
+      providesTags: (_r, _e, id) => [{ type: "DividendTemplate", id }],
+    }),
+    createDividendTemplate: builder.mutation<DividendTemplateDetail, DividendTemplateInput>({
+      query: (body) => ({ url: "dividend-templates", method: "POST", body }),
+      invalidatesTags: [{ type: "DividendTemplate", id: "LIST" }],
+    }),
+    updateDividendTemplate: builder.mutation<
+      DividendTemplateDetail,
+      { id: number; data: DividendTemplateInput }
+    >({
+      query: ({ id, data }) => ({ url: `dividend-templates/${id}`, method: "PUT", body: data }),
+      invalidatesTags: (_r, _e, { id }) => [
+        { type: "DividendTemplate", id },
+        { type: "DividendTemplate", id: "LIST" },
+      ],
+    }),
+    deleteDividendTemplate: builder.mutation<{ ok: boolean }, number>({
+      query: (id) => ({ url: `dividend-templates/${id}`, method: "DELETE" }),
+      invalidatesTags: (_r, _e, id) => [
+        { type: "DividendTemplate", id },
+        { type: "DividendTemplate", id: "LIST" },
+      ],
+    }),
     getAccountsByCurrency: builder.query<Account[], string | { currencyCode: string; scope?: string }>({
       query: (arg) => {
         const currencyCode = typeof arg === "string" ? arg : arg.currencyCode;
@@ -1570,7 +1690,7 @@ export const api = createApi({
       invalidatesTags: [{ type: "Account", id: "LIST" }, { type: "Account" }],
     }),
     getTransfers: builder.query<
-      Transfer[],
+      Transfer[] | { transfers: Transfer[]; total: number; page: number; limit: number },
       {
         dateFrom?: string;
         dateTo?: string;
@@ -1579,6 +1699,8 @@ export const api = createApi({
         currencyCode?: string;
         createdBy?: number;
         tagIds?: string;
+        page?: number;
+        limit?: number;
       }
     >({
       query: (params = {}) => {
@@ -1590,16 +1712,20 @@ export const api = createApi({
         if (params.currencyCode) queryParams.append("currencyCode", params.currencyCode);
         if (params.createdBy !== undefined && params.createdBy !== null) queryParams.append("createdBy", params.createdBy.toString());
         if (params.tagIds) queryParams.append("tagIds", params.tagIds);
+        if (params.page !== undefined) queryParams.append("page", params.page.toString());
+        if (params.limit !== undefined) queryParams.append("limit", params.limit.toString());
         const queryString = queryParams.toString();
         return `transfers${queryString ? `?${queryString}` : ""}`;
       },
-      providesTags: (result) =>
-        result
+      providesTags: (result) => {
+        const transfers = Array.isArray(result) ? result : result?.transfers;
+        return transfers?.length
           ? [
-              ...result.map(({ id }) => ({ type: "Transfer" as const, id })),
+              ...transfers.map(({ id }) => ({ type: "Transfer" as const, id })),
               { type: "Transfer" as const, id: "LIST" },
             ]
-          : [{ type: "Transfer", id: "LIST" }],
+          : [{ type: "Transfer", id: "LIST" }];
+      },
     }),
     createTransfer: builder.mutation<Transfer, TransferInput & { file?: File }>({
       query: ({ file, ...body }) => {
@@ -1713,7 +1839,7 @@ export const api = createApi({
       providesTags: (_res, _err, id) => [{ type: "Transfer", id, variant: "CHANGES" }],
     }),
     getExpenses: builder.query<
-      Expense[],
+      Expense[] | { expenses: Expense[]; total: number; page: number; limit: number },
       {
         dateFrom?: string;
         dateTo?: string;
@@ -1721,6 +1847,9 @@ export const api = createApi({
         currencyCode?: string;
         createdBy?: number;
         tagIds?: string;
+        type?: string;
+        page?: number;
+        limit?: number;
       }
     >({
       query: (params = {}) => {
@@ -1731,16 +1860,21 @@ export const api = createApi({
         if (params.currencyCode) queryParams.append("currencyCode", params.currencyCode);
         if (params.createdBy !== undefined && params.createdBy !== null) queryParams.append("createdBy", params.createdBy.toString());
         if (params.tagIds) queryParams.append("tagIds", params.tagIds);
+        if (params.type) queryParams.append("type", params.type);
+        if (params.page !== undefined) queryParams.append("page", params.page.toString());
+        if (params.limit !== undefined) queryParams.append("limit", params.limit.toString());
         const queryString = queryParams.toString();
         return `expenses${queryString ? `?${queryString}` : ""}`;
       },
-      providesTags: (result) =>
-        result
+      providesTags: (result) => {
+        const expenses = Array.isArray(result) ? result : result?.expenses;
+        return expenses?.length
           ? [
-              ...result.map(({ id }) => ({ type: "Expense" as const, id })),
+              ...expenses.map(({ id }) => ({ type: "Expense" as const, id })),
               { type: "Expense" as const, id: "LIST" },
             ]
-          : [{ type: "Expense", id: "LIST" }],
+          : [{ type: "Expense", id: "LIST" }];
+      },
     }),
     createExpense: builder.mutation<Expense, ExpenseInput & { file?: File }>({
       query: ({ file, ...body }) => {
@@ -2606,6 +2740,20 @@ export const {
   useConfirmPaymentMutation,
   useGetAccountsQuery,
   useGetAccountsSummaryQuery,
+  useGetAccountMonthlyStatisticsQuery,
+  useGetDividendsQuery,
+  useGetDividendQuery,
+  useCreateDividendMutation,
+  useUpdateDividendMutation,
+  useCalculateDividendMutation,
+  usePayDividendMutation,
+  useDeleteDividendMutation,
+  useGetDividendTemplatesQuery,
+  useGetDividendTemplateQuery,
+  useLazyGetDividendTemplateQuery,
+  useCreateDividendTemplateMutation,
+  useUpdateDividendTemplateMutation,
+  useDeleteDividendTemplateMutation,
   useGetAccountsByCurrencyQuery,
   useCreateAccountMutation,
   useUpdateAccountMutation,

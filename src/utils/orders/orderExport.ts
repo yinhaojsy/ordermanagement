@@ -2,6 +2,25 @@ import * as XLSX from "xlsx";
 import type { OrderQueryParams } from "../../types/orders";
 import { formatOrderAccountsColumn } from "./orderAccounts";
 
+type AmountCurrencyEntry = { amount: number; currency: string };
+
+function formatAmountEntries(
+  entries: AmountCurrencyEntry[] | null | undefined,
+  fallbackAmount: number | null | undefined,
+  fallbackCurrency: string | null | undefined,
+): { amount: string | number; currency: string } {
+  if (entries && entries.length > 0) {
+    return {
+      amount: entries.map((e) => e.amount).join(", "),
+      currency: entries.map((e) => e.currency).join(", "),
+    };
+  }
+  return {
+    amount: fallbackAmount ?? 0,
+    currency: fallbackCurrency || "-",
+  };
+}
+
 /**
  * Exports orders to Excel file
  */
@@ -15,8 +34,6 @@ export async function exportOrdersToExcel(
   if (queryParams.dateTo) queryString.append("dateTo", queryParams.dateTo);
   if (queryParams.handlerId !== undefined) queryString.append("handlerId", queryParams.handlerId.toString());
   if (queryParams.customerId !== undefined) queryString.append("customerId", queryParams.customerId.toString());
-  if (queryParams.fromCurrency) queryString.append("fromCurrency", queryParams.fromCurrency);
-  if (queryParams.toCurrency) queryString.append("toCurrency", queryParams.toCurrency);
   if (queryParams.currencyPairs) queryString.append("currencyPairs", queryParams.currencyPairs);
   if (queryParams.accountSearch) queryString.append("accountSearch", queryParams.accountSearch);
   if (queryParams.status) queryString.append("status", queryParams.status);
@@ -34,34 +51,48 @@ export async function exportOrdersToExcel(
   const workbook = XLSX.utils.book_new();
 
   // Prepare data for Excel
-  const excelData = orders.map((order: any) => ({
-    "Order ID": order.id,
-    "Date": order.createdAt ? new Date(order.createdAt).toLocaleDateString() : "",
-    "Handler": order.handlerName || "-",
-    "Customer": order.customerName || "-",
-    "Currency Pair": `${order.fromCurrency}/${order.toCurrency}`,
-    "Rate": order.rate,
-    "Amount Buy": order.amountBuy,
-    "From Currency": order.fromCurrency,
-    "Buy Account": formatOrderAccountsColumn(
-      order.buyAccounts,
-      t("orders.cof"),
-      order.buyAccountName,
-    ),
-    "Amount Sell": order.amountSell,
-    "To Currency": order.toCurrency,
-    "Sell Account": formatOrderAccountsColumn(
-      order.sellAccounts,
-      t("orders.cof"),
-      order.sellAccountName,
-    ),
-    "Status": order.status,
-    "Profit Amount": order.profitAmount || 0,
-    "Profit Currency": order.profitCurrency || "-",
-    "Service Charge Amount": order.serviceChargeAmount || 0,
-    "Service Charge Currency": order.serviceChargeCurrency || "-",
-    "Tags": order.tags && order.tags.length > 0 ? order.tags.map((tag: any) => tag.name).join(", ") : "-",
-  }));
+  const excelData = orders.map((order: any) => {
+    const profit = formatAmountEntries(
+      order.profitEntries,
+      order.profitAmount,
+      order.profitCurrency,
+    );
+    const serviceCharge = formatAmountEntries(
+      order.serviceChargeEntries,
+      order.serviceChargeAmount,
+      order.serviceChargeCurrency,
+    );
+
+    return {
+      "Order ID": order.id,
+      "Date": order.createdAt ? new Date(order.createdAt).toLocaleDateString() : "",
+      "Handler": order.handlerName || "-",
+      "Customer": order.customerName || "-",
+      "Currency Pair": `${order.fromCurrency}/${order.toCurrency}`,
+      "Rate": order.rate,
+      "Amount Buy": order.amountBuy,
+      "From Currency": order.fromCurrency,
+      "Buy Account": formatOrderAccountsColumn(
+        order.buyAccounts,
+        t("orders.cof"),
+        order.buyAccountName,
+      ),
+      "Amount Sell": order.amountSell,
+      "To Currency": order.toCurrency,
+      "Sell Account": formatOrderAccountsColumn(
+        order.sellAccounts,
+        t("orders.cof"),
+        order.sellAccountName,
+      ),
+      "Status": order.status,
+      "Profit Amount": profit.amount,
+      "Profit Currency": profit.currency,
+      "Service Charge Amount": serviceCharge.amount,
+      "Service Charge Currency": serviceCharge.currency,
+      "Tags": order.tags && order.tags.length > 0 ? order.tags.map((tag: any) => tag.name).join(", ") : "-",
+      "Remarks": order.remarks?.trim() || "",
+    };
+  });
 
   // Create worksheet
   const worksheet = XLSX.utils.json_to_sheet(excelData);

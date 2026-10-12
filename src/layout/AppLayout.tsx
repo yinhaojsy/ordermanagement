@@ -23,7 +23,7 @@ import { getSseUrl } from "../utils/authToken";
 import { useLogoutMutation } from "../services/api";
 
 type SidebarEntry =
-  | { kind: "link"; to: string; labelKey: string; end?: boolean; section?: string; adminOnly?: boolean }
+  | { kind: "link"; to: string; labelKey: string; end?: boolean; section?: string; sections?: string[]; adminOnly?: boolean }
   | { kind: "customersSubmenu" };
 
 const sidebarEntries: SidebarEntry[] = [
@@ -31,6 +31,7 @@ const sidebarEntries: SidebarEntry[] = [
   { kind: "link", to: "/orders", labelKey: "nav.orders", section: "orders" },
   { kind: "link", to: "/expenses", labelKey: "nav.expenses", section: "expenses" },
   { kind: "link", to: "/transfers", labelKey: "nav.transfers", section: "transfers" },
+  { kind: "link", to: "/dividends", labelKey: "nav.dividends", section: "dividends" },
   { kind: "customersSubmenu" },
   { kind: "link", to: "/accounts", labelKey: "nav.accounts", section: "accounts" },
   { kind: "link", to: "/currencies", labelKey: "nav.currencies", section: "currencies" },
@@ -39,6 +40,7 @@ const sidebarEntries: SidebarEntry[] = [
   { kind: "link", to: "/roles", labelKey: "nav.roles", section: "roles" },
   { kind: "link", to: "/tags", labelKey: "nav.tags", section: "tags" },
   { kind: "link", to: "/profit", labelKey: "nav.profit", section: "profit" },
+  { kind: "link", to: "/reports/account-monthly", labelKey: "nav.reports", sections: ["dashboard", "accounts", "profit"] },
   { kind: "link", to: "/wallets", labelKey: "nav.wallets", section: "wallets" },
   { kind: "link", to: "/settings", labelKey: "nav.settings", adminOnly: true },
 ];
@@ -488,6 +490,9 @@ export default function AppLayout() {
     }
     if (entry.kind === "link") {
       if (entry.adminOnly) return user?.role === "admin";
+      if (entry.sections?.length) {
+        return entry.sections.some((section) => hasSectionAccess(user, section));
+      }
       if (entry.section) return hasSectionAccess(user, entry.section);
       return true;
     }
@@ -505,6 +510,9 @@ export default function AppLayout() {
     for (const entry of sidebarEntries) {
       if (entry.kind !== "link") continue;
       if (entry.adminOnly && user?.role !== "admin") continue;
+      if (entry.sections?.length && !entry.sections.some((section) => hasSectionAccess(user, section))) {
+        continue;
+      }
       if (entry.section && !hasSectionAccess(user, entry.section)) continue;
 
       const active = entry.end

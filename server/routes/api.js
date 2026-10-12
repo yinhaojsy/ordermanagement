@@ -125,6 +125,23 @@ import {
   getAccountReferences,
   getAllReferences,
 } from "../controllers/accountsController.js";
+import { getAccountMonthlyStatisticsHandler } from "../controllers/reportsController.js";
+import {
+  listDividends,
+  getDividend,
+  createDividend,
+  updateDividend,
+  calculateDividend,
+  payDividend,
+  removeDividend,
+} from "../controllers/dividendsController.js";
+import {
+  listTemplates,
+  getTemplate,
+  createTemplate,
+  updateTemplate,
+  removeTemplate,
+} from "../controllers/dividendTemplatesController.js";
 import {
   listTransfers,
   exportTransfers,
@@ -260,6 +277,7 @@ const accountListSections = [
   "transfers",
   "orders",
   "profit",
+  "dividends",
   "customers",
   "dashboard",
 ];
@@ -464,6 +482,25 @@ protectedRouter.post("/accounts/:id/add-funds", section("accounts"), action("upd
 protectedRouter.post("/accounts/:id/withdraw-funds", section("accounts"), action("updateAccount"), withdrawFunds);
 protectedRouter.get("/accounts/:id/transactions", section("accounts"), getAccountTransactions);
 protectedRouter.delete("/accounts/transactions/clear-all", requireAdmin, clearAllTransactionLogs);
+protectedRouter.get(
+  "/reports/account-monthly",
+  anySection("dashboard", "accounts", "profit"),
+  getAccountMonthlyStatisticsHandler,
+);
+
+protectedRouter.get("/dividends", section("dividends"), listDividends);
+protectedRouter.get("/dividends/:id", section("dividends"), getDividend);
+protectedRouter.post("/dividends", section("dividends"), createDividend);
+protectedRouter.put("/dividends/:id", section("dividends"), updateDividend);
+protectedRouter.post("/dividends/:id/calculate", section("dividends"), calculateDividend);
+protectedRouter.post("/dividends/:id/pay", section("dividends"), payDividend);
+protectedRouter.delete("/dividends/:id", section("dividends"), removeDividend);
+
+protectedRouter.get("/dividend-templates", section("dividends"), listTemplates);
+protectedRouter.get("/dividend-templates/:id", section("dividends"), getTemplate);
+protectedRouter.post("/dividend-templates", section("dividends"), createTemplate);
+protectedRouter.put("/dividend-templates/:id", section("dividends"), updateTemplate);
+protectedRouter.delete("/dividend-templates/:id", section("dividends"), removeTemplate);
 
 protectedRouter.get("/transfers", section("transfers"), listTransfers);
 protectedRouter.get("/transfers/export", section("transfers"), action("exportTransfer"), exportTransfers);
@@ -479,8 +516,8 @@ protectedRouter.get("/expenses/:id/changes", section("expenses"), getExpenseChan
 protectedRouter.put("/expenses/:id", section("expenses"), action("editExpense"), upload.single("file"), updateExpense);
 protectedRouter.delete("/expenses/:id", section("expenses"), action("deleteExpense"), deleteExpense);
 
-protectedRouter.get("/profit-calculations", section("profit"), getProfitCalculations);
-protectedRouter.get("/profit-calculations/:id", section("profit"), getProfitCalculation);
+protectedRouter.get("/profit-calculations", anySection("profit", "dividends"), getProfitCalculations);
+protectedRouter.get("/profit-calculations/:id", anySection("profit", "dividends"), getProfitCalculation);
 protectedRouter.post("/profit-calculations", section("profit"), createProfitCalculation);
 protectedRouter.put("/profit-calculations/:id", section("profit"), updateProfitCalculation);
 protectedRouter.delete("/profit-calculations/:id", section("profit"), deleteProfitCalculation);
@@ -507,7 +544,7 @@ protectedRouter.post("/settings/clear-database", requireAdmin, clearDatabase);
 protectedRouter.get("/settings/debug/schema", requireAdmin, getDbSchema);
 protectedRouter.post("/settings/debug/query", requireAdmin, executeQuery);
 
-protectedRouter.get("/tags", section("tags"), listTags);
+protectedRouter.get("/tags", anySection("tags", "dividends", "orders", "expenses", "transfers", "dashboard"), listTags);
 protectedRouter.post("/tags", section("tags"), action("createTag"), createTag);
 protectedRouter.put("/tags/:id", section("tags"), updateTag);
 protectedRouter.delete("/tags/:id", section("tags"), action("deleteTag"), deleteTag);

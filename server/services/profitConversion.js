@@ -1,24 +1,33 @@
 import { db } from "../db.js";
 import { convertCurrency } from "../utils/currencyConversion.js";
 
-/** Default profit calculation rates for converting amounts to target currency. */
-export function getDefaultProfitConversion() {
-  const defaultCalc = db
-    .prepare("SELECT * FROM profit_calculations WHERE isDefault = 1 LIMIT 1;")
-    .get();
+/** Profit calculation rates for converting amounts to target currency. */
+export function getProfitConversion(profitCalculationId) {
+  const calc = profitCalculationId
+    ? db.prepare("SELECT * FROM profit_calculations WHERE id = ?;").get(profitCalculationId)
+    : db
+        .prepare("SELECT * FROM profit_calculations WHERE isDefault = 1 LIMIT 1;")
+        .get();
 
-  if (!defaultCalc) {
-    return { targetCurrency: null, convertToTarget: () => null };
+  if (!calc) {
+    return {
+      profitCalculationId: null,
+      profitCalculationName: null,
+      targetCurrency: null,
+      convertToTarget: () => null,
+      convertFromTarget: () => null,
+      rateToTarget: {},
+    };
   }
 
   const rates = db
     .prepare(
       "SELECT fromCurrencyCode, toCurrencyCode, rate FROM profit_exchange_rates WHERE profitCalculationId = ?;",
     )
-    .all(defaultCalc.id);
+    .all(calc.id);
 
   const currencies = db.prepare("SELECT * FROM currencies ORDER BY code ASC;").all();
-  const targetCurrency = defaultCalc.targetCurrencyCode;
+  const targetCurrency = calc.targetCurrencyCode;
   const rateToTarget = {};
   for (const r of rates) {
     if (r.toCurrencyCode === targetCurrency) {
@@ -33,5 +42,26 @@ export function getDefaultProfitConversion() {
     return convertCurrency(amount, rate, fromCode, targetCurrency, currencies);
   };
 
+  /** Convert an amount in target currency into `toCode` using the same stored rate. */
+  const convertFromTarget = (amountInTarget, toCode) => {
+    if (toCode === targetCurrency) return amountInTarget;
+    const rate = rateToTarget[toCode];
+    if (rate === undefined || rate === null) return null;
+    return convertCurrency(amountInTarget, rate, targetCurrency, toCode, currencies);
+  };
+
+  return {
+    profitCalculationId: calc.id,
+    profitCalculationName: calc.name,
+    targetCurrency,
+    convertToTarget,
+    convertFromTarget,
+    rateToTarget,
+  };
+}
+
+/** Default profit calculation rates for converting amounts to target currency. */
+export function getDefaultProfitConversion() {
+  const { targetCurrency, convertToTarget } = getProfitConversion();
   return { targetCurrency, convertToTarget };
 }

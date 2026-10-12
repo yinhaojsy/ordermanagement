@@ -2,6 +2,7 @@ import { useMemo, useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { useAppSelector } from "../app/hooks";
+import { hasSectionAccess } from "../utils/permissions";
 import {
   DndContext,
   closestCenter,
@@ -258,6 +259,11 @@ export default function DashboardPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const userId = useAppSelector((s) => s.auth.user?.id);
+  const user = useAppSelector((s) => s.auth.user);
+  const canViewReports =
+    hasSectionAccess(user, "dashboard") ||
+    hasSectionAccess(user, "accounts") ||
+    hasSectionAccess(user, "profit");
 
   const { data: currencies = [] } = useGetCurrenciesQuery();
   const { data: customersData } = useGetCustomerOptionsQuery();
@@ -472,6 +478,17 @@ export default function DashboardPage() {
         )}
         <CustomerDepositDashboardCard />
       </div>
+
+      {canViewReports && (
+        <button
+          type="button"
+          onClick={() => navigate("/reports/account-monthly")}
+          className="w-full rounded-xl border border-slate-200 bg-white px-5 py-4 text-left shadow-sm transition hover:border-blue-300 hover:bg-blue-50/40"
+        >
+          <div className="text-sm font-semibold text-slate-900">{t("dashboard.monthlyAccountReport")}</div>
+          <div className="mt-1 text-sm text-slate-600">{t("dashboard.monthlyAccountReportDesc")}</div>
+        </button>
+      )}
 
       {orderedPools.length > 0 && (
         <div className="space-y-3">

@@ -398,6 +398,85 @@ export interface AccountTransaction {
   createdAt: string;
 }
 
+export interface AccountMonthlySummaryRow {
+  id: number;
+  name: string;
+  currencyCode: string;
+  currencyName?: string;
+  openingBalance: number;
+  closingBalance: number;
+  totalInflow: number;
+  totalOutflow: number;
+  netChange: number;
+}
+
+export interface AccountMonthlyDailyCell {
+  inflow: number;
+  outflow: number;
+  net: number;
+}
+
+export interface AccountMonthlyDailyRow {
+  date: string;
+  byAccount: Record<string, AccountMonthlyDailyCell>;
+}
+
+export interface AccountMonthlyCurrencyPoolRow {
+  currencyCode: string;
+  currencyName?: string;
+  accountCount: number;
+  totalInflow: number;
+  totalOutflow: number;
+  netChange: number;
+  netChangeConverted: number;
+}
+
+export interface AccountMonthlyPnLBreakdown {
+  profitCalculationId: number;
+  profitCalculationName: string;
+  targetCurrency: string;
+  orderGrossProfit: number;
+  serviceCharges: number;
+  otherIncome: number;
+  totalExpenses: number;
+  transferFees: number;
+  total: number;
+}
+
+export interface AccountMonthlyStatistics {
+  year: number;
+  month: number;
+  periodStartDay: number;
+  periodEndMode: "eom" | "day";
+  periodEndDay: number | null;
+  periodStartDate: string;
+  periodEndDate: string;
+  periodEndExclusiveDate: string;
+  periodStartIso: string;
+  periodEndExclusiveIso: string;
+  dates: string[];
+  accounts: AccountMonthlySummaryRow[];
+  daily: AccountMonthlyDailyRow[];
+  currencyPools: AccountMonthlyCurrencyPoolRow[];
+  totalNetChangeConverted: number;
+  targetCurrency: string | null;
+  pnlBreakdown: AccountMonthlyPnLBreakdown | null;
+  depositTotalsAtStart: CustomerDepositTotalByCurrency[];
+  depositTotalsAtEnd: CustomerDepositTotalByCurrency[];
+}
+
+export const ACCOUNT_STATISTICS_PERIOD_START_KEY = "accountStatisticsPeriodStartDay";
+export const ACCOUNT_STATISTICS_PERIOD_END_MODE_KEY = "accountStatisticsPeriodEndMode";
+export const ACCOUNT_STATISTICS_PERIOD_END_DAY_KEY = "accountStatisticsPeriodEndDay";
+
+export type { ReportingCycle, PeriodEndMode } from "./utils/accounts/periodBounds";
+export {
+  DEFAULT_REPORTING_CYCLE,
+  resolvePeriodBounds,
+  loadReportingCycleFromStorage,
+  saveReportingCycleToStorage,
+} from "./utils/accounts/periodBounds";
+
 export interface Transfer {
   id: number;
   fromAccountId: number;
@@ -971,6 +1050,202 @@ export interface CustomerKycResponse {
   schema: CustomerKycSchema;
   profile: CustomerKycProfileDto;
   documents: CustomerKycDocumentDto[];
+}
+
+export type DividendStatus = "draft" | "calculated" | "partially_paid" | "paid";
+export type DividendSourceMode = "auto" | "manual";
+
+export interface DividendCalculationSummary {
+  id: number;
+  name: string;
+  periodStartDate: string;
+  periodEndDate: string;
+  status: DividendStatus;
+  sourceMode?: DividendSourceMode | string | null;
+  manualInputCurrencyCode?: string | null;
+  targetCurrencyCode?: string | null;
+  profitCalculationId?: number | null;
+  createdBy?: number | null;
+  createdAt: string;
+  updatedAt: string;
+  calculatedAt?: string | null;
+}
+
+export interface DividendTagRef {
+  id: number;
+  name: string;
+  color: string;
+}
+
+export interface DividendExpenseTagAssignment extends DividendTagRef {
+  assignmentId?: number;
+  tagId: number;
+  allocationPercent: number;
+}
+
+export interface DividendBusinessShare {
+  id?: number;
+  personId: number;
+  personName?: string;
+  sharePercent: number;
+  amount?: number | null;
+}
+
+export interface DividendBusiness {
+  id: number;
+  calculationId: number;
+  name: string;
+  sortOrder: number;
+  keepPercent: number;
+  remainderBusinessId?: number | null;
+  orderProfit?: number | null;
+  expenseTotal?: number | null;
+  incomeTotal?: number | null;
+  netProfit?: number | null;
+  poolAmount?: number | null;
+  orderTags: DividendTagRef[];
+  expenseTags: DividendExpenseTagAssignment[];
+  shares: DividendBusinessShare[];
+}
+
+export interface DividendPerson {
+  id: number;
+  calculationId: number;
+  name: string;
+  totalAmount?: number | null;
+  paidAmount?: number;
+}
+
+export interface DividendPersonTotal {
+  id: number;
+  personId: number;
+  personName: string;
+  amount: number;
+  paidAmount: number;
+  remainingAmount: number;
+}
+
+export interface DividendPayment {
+  id: number;
+  personId: number;
+  personName: string;
+  accountId: number;
+  accountName?: string | null;
+  amount: number;
+  currencyCode: string;
+  description?: string | null;
+  createdBy?: number | null;
+  createdAt: string;
+}
+
+export interface DividendCalculationDetail extends DividendCalculationSummary {
+  notes?: string | null;
+  businesses: DividendBusiness[];
+  persons: DividendPerson[];
+  personTotals: DividendPersonTotal[];
+  payments: DividendPayment[];
+  warnings?: string[];
+}
+
+export interface DividendBusinessInput {
+  tempKey: string;
+  id?: number;
+  name: string;
+  sortOrder?: number;
+  keepPercent: number;
+  remainderBusinessTempKey?: string | null;
+  orderTagIds: number[];
+  expenseTags: { tagId: number; allocationPercent: number }[];
+  shares: { personTempKey: string; sharePercent: number }[];
+  manualOrderProfit?: number | null;
+  manualExpenseTotal?: number | null;
+  manualIncomeTotal?: number | null;
+}
+
+export interface DividendPersonInput {
+  tempKey: string;
+  id?: number;
+  name: string;
+}
+
+export interface DividendCalculationInput {
+  name: string;
+  periodStartDate: string;
+  periodEndDate: string;
+  sourceMode?: DividendSourceMode;
+  manualInputCurrencyCode?: string | null;
+  profitCalculationId?: number | null;
+  notes?: string | null;
+  businesses: DividendBusinessInput[];
+  persons: DividendPersonInput[];
+}
+
+export interface DividendPayInput {
+  personId: number;
+  payments: { accountId: number; amount: number }[];
+}
+
+export interface DividendTemplateSummary {
+  id: number;
+  name: string;
+  notes?: string | null;
+  businessCount: number;
+  personCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DividendTemplateShare {
+  id?: number;
+  templatePersonId: number;
+  personName?: string;
+  sharePercent: number;
+}
+
+export interface DividendTemplateBusiness {
+  id: number;
+  templateId: number;
+  name: string;
+  sortOrder: number;
+  keepPercent: number;
+  remainderBusinessId?: number | null;
+  shares: DividendTemplateShare[];
+}
+
+export interface DividendTemplatePerson {
+  id: number;
+  templateId: number;
+  name: string;
+  sortOrder: number;
+}
+
+export interface DividendTemplateDetail extends DividendTemplateSummary {
+  businesses: DividendTemplateBusiness[];
+  persons: DividendTemplatePerson[];
+}
+
+export interface DividendTemplateBusinessInput {
+  tempKey: string;
+  id?: number;
+  name: string;
+  sortOrder?: number;
+  keepPercent: number;
+  remainderBusinessTempKey?: string | null;
+  shares: { personTempKey: string; sharePercent: number }[];
+}
+
+export interface DividendTemplatePersonInput {
+  tempKey: string;
+  id?: number;
+  name: string;
+  sortOrder?: number;
+}
+
+export interface DividendTemplateInput {
+  name: string;
+  notes?: string | null;
+  businesses: DividendTemplateBusinessInput[];
+  persons: DividendTemplatePersonInput[];
 }
 
 

@@ -66,7 +66,7 @@ export const replaceDatabaseFromPath = (sourcePath) => {
   return db;
 };
 
-const SECTIONS = ["dashboard", "currencies", "customers", "users", "roles", "orders", "transfers", "accounts", "expenses", "profit", "wallets", "referenceRates"];
+const SECTIONS = ["dashboard", "currencies", "customers", "users", "roles", "orders", "transfers", "accounts", "expenses", "profit", "dividends", "wallets", "referenceRates"];
 
 const ensureSchema = () => {
   db.prepare(
@@ -634,6 +634,160 @@ const ensureSchema = () => {
       PRIMARY KEY (expenseId, tagId),
       FOREIGN KEY(expenseId) REFERENCES expenses(id) ON DELETE CASCADE,
       FOREIGN KEY(tagId) REFERENCES tags(id) ON DELETE CASCADE
+    );`,
+  ).run();
+
+  db.prepare(
+    `CREATE TABLE IF NOT EXISTS dividend_calculations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      periodStartDate TEXT NOT NULL DEFAULT '',
+      periodEndDate TEXT NOT NULL DEFAULT '',
+      profitCalculationId INTEGER,
+      sourceMode TEXT NOT NULL DEFAULT 'auto',
+      manualInputCurrencyCode TEXT,
+      status TEXT NOT NULL DEFAULT 'draft',
+      targetCurrencyCode TEXT,
+      notes TEXT,
+      createdBy INTEGER,
+      createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      calculatedAt TEXT,
+      FOREIGN KEY(profitCalculationId) REFERENCES profit_calculations(id),
+      FOREIGN KEY(createdBy) REFERENCES users(id)
+    );`,
+  ).run();
+
+  db.prepare(
+    `CREATE TABLE IF NOT EXISTS dividend_businesses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      calculationId INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      sortOrder INTEGER NOT NULL DEFAULT 0,
+      keepPercent REAL NOT NULL DEFAULT 100,
+      remainderBusinessId INTEGER,
+      orderProfit REAL,
+      expenseTotal REAL,
+      incomeTotal REAL,
+      netProfit REAL,
+      poolAmount REAL,
+      FOREIGN KEY(calculationId) REFERENCES dividend_calculations(id) ON DELETE CASCADE
+    );`,
+  ).run();
+
+  db.prepare(
+    `CREATE TABLE IF NOT EXISTS dividend_business_order_tags (
+      businessId INTEGER NOT NULL,
+      tagId INTEGER NOT NULL,
+      PRIMARY KEY (businessId, tagId),
+      FOREIGN KEY(businessId) REFERENCES dividend_businesses(id) ON DELETE CASCADE
+    );`,
+  ).run();
+
+  db.prepare(
+    `CREATE TABLE IF NOT EXISTS dividend_business_expense_tags (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      businessId INTEGER NOT NULL,
+      tagId INTEGER NOT NULL,
+      allocationPercent REAL NOT NULL DEFAULT 100,
+      UNIQUE(businessId, tagId),
+      FOREIGN KEY(businessId) REFERENCES dividend_businesses(id) ON DELETE CASCADE
+    );`,
+  ).run();
+
+  db.prepare(
+    `CREATE TABLE IF NOT EXISTS dividend_persons (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      calculationId INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      FOREIGN KEY(calculationId) REFERENCES dividend_calculations(id) ON DELETE CASCADE
+    );`,
+  ).run();
+
+  db.prepare(
+    `CREATE TABLE IF NOT EXISTS dividend_business_shares (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      businessId INTEGER NOT NULL,
+      personId INTEGER NOT NULL,
+      sharePercent REAL NOT NULL,
+      amount REAL,
+      UNIQUE(businessId, personId),
+      FOREIGN KEY(businessId) REFERENCES dividend_businesses(id) ON DELETE CASCADE,
+      FOREIGN KEY(personId) REFERENCES dividend_persons(id) ON DELETE CASCADE
+    );`,
+  ).run();
+
+  db.prepare(
+    `CREATE TABLE IF NOT EXISTS dividend_person_totals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      calculationId INTEGER NOT NULL,
+      personId INTEGER NOT NULL,
+      amount REAL NOT NULL DEFAULT 0,
+      UNIQUE(calculationId, personId),
+      FOREIGN KEY(calculationId) REFERENCES dividend_calculations(id) ON DELETE CASCADE,
+      FOREIGN KEY(personId) REFERENCES dividend_persons(id) ON DELETE CASCADE
+    );`,
+  ).run();
+
+  db.prepare(
+    `CREATE TABLE IF NOT EXISTS dividend_payments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      calculationId INTEGER NOT NULL,
+      personId INTEGER NOT NULL,
+      accountId INTEGER NOT NULL,
+      amount REAL NOT NULL,
+      currencyCode TEXT NOT NULL,
+      description TEXT,
+      createdBy INTEGER,
+      createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(calculationId) REFERENCES dividend_calculations(id) ON DELETE CASCADE,
+      FOREIGN KEY(personId) REFERENCES dividend_persons(id) ON DELETE CASCADE,
+      FOREIGN KEY(accountId) REFERENCES accounts(id),
+      FOREIGN KEY(createdBy) REFERENCES users(id)
+    );`,
+  ).run();
+
+  db.prepare(
+    `CREATE TABLE IF NOT EXISTS dividend_templates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      notes TEXT,
+      createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );`,
+  ).run();
+
+  db.prepare(
+    `CREATE TABLE IF NOT EXISTS dividend_template_businesses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      templateId INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      sortOrder INTEGER NOT NULL DEFAULT 0,
+      keepPercent REAL NOT NULL DEFAULT 100,
+      remainderBusinessId INTEGER,
+      FOREIGN KEY(templateId) REFERENCES dividend_templates(id) ON DELETE CASCADE
+    );`,
+  ).run();
+
+  db.prepare(
+    `CREATE TABLE IF NOT EXISTS dividend_template_persons (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      templateId INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      sortOrder INTEGER NOT NULL DEFAULT 0,
+      FOREIGN KEY(templateId) REFERENCES dividend_templates(id) ON DELETE CASCADE
+    );`,
+  ).run();
+
+  db.prepare(
+    `CREATE TABLE IF NOT EXISTS dividend_template_shares (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      templateBusinessId INTEGER NOT NULL,
+      templatePersonId INTEGER NOT NULL,
+      sharePercent REAL NOT NULL,
+      UNIQUE(templateBusinessId, templatePersonId),
+      FOREIGN KEY(templateBusinessId) REFERENCES dividend_template_businesses(id) ON DELETE CASCADE,
+      FOREIGN KEY(templatePersonId) REFERENCES dividend_template_persons(id) ON DELETE CASCADE
     );`,
   ).run();
 
@@ -1716,6 +1870,122 @@ const migrateDatabase = () => {
         ).run();
       }
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('tron_wallets_aml_auto_screen_tx_v1')").run();
+    }
+
+    const dividendsSectionMigration = db
+      .prepare("SELECT 1 FROM _schema_migrations WHERE key = ?")
+      .get("dividends_section_v1");
+    if (!dividendsSectionMigration) {
+      const rolesForDividends = db.prepare("SELECT id, name, permissions FROM roles").all();
+      rolesForDividends.forEach((role) => {
+        try {
+          const permissions = JSON.parse(role.permissions);
+          let updated = false;
+          if (!permissions.sections) permissions.sections = [];
+          if (role.name === "admin" && !permissions.sections.includes("dividends")) {
+            permissions.sections.push("dividends");
+            updated = true;
+          }
+          if (updated) {
+            db.prepare(
+              "UPDATE roles SET permissions = @permissions, updatedAt = @updatedAt WHERE id = @id",
+            ).run({
+              id: role.id,
+              permissions: JSON.stringify(permissions),
+              updatedAt: new Date().toISOString(),
+            });
+          }
+        } catch (error) {
+          console.error(`Error migrating dividends section for role ${role.id}:`, error);
+        }
+      });
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('dividends_section_v1')").run();
+    }
+
+    const dividendsUntaggedMigration = db
+      .prepare("SELECT 1 FROM _schema_migrations WHERE key = ?")
+      .get("dividends_untagged_tag_v1");
+    if (!dividendsUntaggedMigration) {
+      // Drop FK to tags so tagId=0 can mean "untagged"
+      db.prepare(
+        `CREATE TABLE IF NOT EXISTS dividend_business_order_tags_new (
+          businessId INTEGER NOT NULL,
+          tagId INTEGER NOT NULL,
+          PRIMARY KEY (businessId, tagId),
+          FOREIGN KEY(businessId) REFERENCES dividend_businesses(id) ON DELETE CASCADE
+        );`,
+      ).run();
+      db.prepare(
+        `INSERT OR IGNORE INTO dividend_business_order_tags_new (businessId, tagId)
+         SELECT businessId, tagId FROM dividend_business_order_tags;`,
+      ).run();
+      db.prepare("DROP TABLE dividend_business_order_tags;").run();
+      db.prepare(
+        "ALTER TABLE dividend_business_order_tags_new RENAME TO dividend_business_order_tags;",
+      ).run();
+
+      db.prepare(
+        `CREATE TABLE IF NOT EXISTS dividend_business_expense_tags_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          businessId INTEGER NOT NULL,
+          tagId INTEGER NOT NULL,
+          allocationPercent REAL NOT NULL DEFAULT 100,
+          UNIQUE(businessId, tagId),
+          FOREIGN KEY(businessId) REFERENCES dividend_businesses(id) ON DELETE CASCADE
+        );`,
+      ).run();
+      db.prepare(
+        `INSERT OR IGNORE INTO dividend_business_expense_tags_new (id, businessId, tagId, allocationPercent)
+         SELECT id, businessId, tagId, allocationPercent FROM dividend_business_expense_tags;`,
+      ).run();
+      db.prepare("DROP TABLE dividend_business_expense_tags;").run();
+      db.prepare(
+        "ALTER TABLE dividend_business_expense_tags_new RENAME TO dividend_business_expense_tags;",
+      ).run();
+
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('dividends_untagged_tag_v1')").run();
+    }
+
+    const dividendsSourceModeMigration = db
+      .prepare("SELECT 1 FROM _schema_migrations WHERE key = ?")
+      .get("dividends_source_mode_v1");
+    if (!dividendsSourceModeMigration) {
+      const calcCols = db
+        .prepare("PRAGMA table_info(dividend_calculations)")
+        .all()
+        .map((c) => c.name);
+      if (!calcCols.includes("sourceMode")) {
+        db.prepare(
+          "ALTER TABLE dividend_calculations ADD COLUMN sourceMode TEXT NOT NULL DEFAULT 'auto'",
+        ).run();
+      }
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('dividends_source_mode_v1')").run();
+    }
+
+    const dividendsManualInputCurrencyMigration = db
+      .prepare("SELECT 1 FROM _schema_migrations WHERE key = ?")
+      .get("dividends_manual_input_currency_v1");
+    if (!dividendsManualInputCurrencyMigration) {
+      const calcCols = db
+        .prepare("PRAGMA table_info(dividend_calculations)")
+        .all()
+        .map((c) => c.name);
+      if (!calcCols.includes("manualInputCurrencyCode")) {
+        db.prepare(
+          "ALTER TABLE dividend_calculations ADD COLUMN manualInputCurrencyCode TEXT",
+        ).run();
+      }
+      db.prepare(
+        "INSERT INTO _schema_migrations (key) VALUES ('dividends_manual_input_currency_v1')",
+      ).run();
+    }
+
+    // dividend_templates tables are created in ensureSchema (CREATE IF NOT EXISTS)
+    const dividendsTemplatesMigration = db
+      .prepare("SELECT 1 FROM _schema_migrations WHERE key = ?")
+      .get("dividends_templates_v1");
+    if (!dividendsTemplatesMigration) {
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('dividends_templates_v1')").run();
     }
 
     const tronWalletUsdtBlacklistMigration = db

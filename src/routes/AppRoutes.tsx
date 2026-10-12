@@ -17,6 +17,8 @@ import OrdersPage from "../pages/OrdersPage";
 import LoginPage from "../pages/LoginPage";
 import ForgotPasswordPage from "../pages/ForgotPasswordPage";
 import ProfitCalculationPage from "../pages/ProfitCalculationPage";
+import DividendsPage from "../pages/DividendsPage";
+import AccountMonthlyReportPage from "../pages/AccountMonthlyReportPage";
 import SettingsPage from "../pages/SettingsPage";
 import IntegrationsPage from "../pages/IntegrationsPage";
 import NotificationsPage from "../pages/NotificationsPage";
@@ -50,6 +52,23 @@ function RequireAdmin({ children }: { children: ReactElement }) {
     return <Navigate to="/login" replace />;
   }
   if (user.role !== "admin") {
+    return <Navigate to="/" replace />;
+  }
+  return children;
+}
+
+function RequireAnySection({
+  children,
+  sections,
+}: {
+  children: ReactElement;
+  sections: string[];
+}) {
+  const user = useAppSelector((s) => s.auth.user);
+  if (!user || !hasStoredSession()) {
+    return <Navigate to="/login" replace />;
+  }
+  if (!sections.some((section) => hasSectionAccess(user, section))) {
     return <Navigate to="/" replace />;
   }
   return children;
@@ -139,6 +158,15 @@ export default function AppRoutes() {
           <Route path="profile" element={<RequireAuth><ProfilePage /></RequireAuth>} />
           <Route path="preferences" element={<Navigate to="/profile" replace />} />
           <Route path="profit" element={<RequireAuth section="profit"><ProfitCalculationPage /></RequireAuth>} />
+          <Route path="dividends" element={<RequireAuth section="dividends"><DividendsPage /></RequireAuth>} />
+          <Route
+            path="reports/account-monthly"
+            element={
+              <RequireAnySection sections={["dashboard", "accounts", "profit"]}>
+                <AccountMonthlyReportPage />
+              </RequireAnySection>
+            }
+          />
           <Route
             path="reference-rates"
             element={
