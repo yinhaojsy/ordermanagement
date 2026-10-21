@@ -2305,6 +2305,52 @@ function shouldReverseConfirmedEntryOnDelete(orderId) {
   return order?.status !== "cancelled";
 }
 
+const LEDGER_EPSILON = 0.000001;
+
+function signedTransactionDelta(type, amount) {
+  const kind = String(type || "").toLowerCase();
+  const value = Number(amount) || 0;
+  if (kind === "add" || kind === "credit") return value;
+  if (kind === "withdraw" || kind === "subtract" || kind === "debit") return -value;
+  return 0;
+}
+
+function orderAccountLegNet(orderId, accountId, leg) {
+  const patterns =
+    leg === "receipt"
+      ? [
+          `Order #${orderId} - Receipt from customer%`,
+          `Order #${orderId} - Receipt reversed (order edited)%`,
+          `Order #${orderId} - Reversal of receipt from customer%`,
+        ]
+      : [
+          `Order #${orderId} - Payment to customer%`,
+          `Order #${orderId} - Payment reversed (order edited)%`,
+          `Order #${orderId} - Reversal of payment to customer%`,
+        ];
+  const rows = db
+    .prepare(
+      `SELECT type, amount FROM account_transactions
+       WHERE accountId = ?
+         AND (description LIKE ? OR description LIKE ? OR description LIKE ?);`,
+    )
+    .all(accountId, patterns[0], patterns[1], patterns[2]);
+  return rows.reduce((sum, row) => sum + signedTransactionDelta(row.type, row.amount), 0);
+}
+
+/**
+ * How much of a direct completion posting is still on the account.
+ * Editing a completed order already reverses deleted receipt/payment lines, so delete and cancel
+ * must not reverse amountBuy/amountSell again once that leg is back to zero.
+ */
+function outstandingDirectReversal(orderId, accountId, leg, configuredAmount) {
+  const amount = Number(configuredAmount);
+  if (!accountId || !Number.isFinite(amount) || amount <= LEDGER_EPSILON) return 0;
+  const net = orderAccountLegNet(orderId, accountId, leg);
+  const outstanding = leg === "receipt" ? Math.max(net, 0) : Math.max(-net, 0);
+  return Math.min(amount, outstanding);
+}
+
 /**
  * Reverses confirmed receipts/payments, direct completion balances, profit, and service charge.
  * Same rules as order deletion; used for delete and for cancel.
@@ -2329,7 +2375,6 @@ function performOrderFinancialReversals(orderId, order, reasonLabel) {
     .all(id);
 
   const isCompleted = order.status === "completed";
-  const hasDirectTransactions = isCompleted && (order.buyAccountId || order.sellAccountId);
 
   receipts.forEach((receipt) => {
     if (isCustomerBalanceFunded(receipt)) return;
@@ -2367,41 +2412,35 @@ function performOrderFinancialReversals(orderId, order, reasonLabel) {
     }
   });
 
-  if (hasDirectTransactions) {
-    if (order.buyAccountId && order.amountBuy) {
-      const buyAccountId = order.buyAccountId;
-      const amountBuy = Number(order.amountBuy);
-      const hasReceiptReversal = receipts.some((r) => r.accountId === buyAccountId);
-      if (!hasReceiptReversal && !isNaN(amountBuy) && amountBuy > 0) {
-        db.prepare("UPDATE accounts SET balance = balance - ? WHERE id = ?;").run(amountBuy, buyAccountId);
-        db.prepare(
-          `INSERT INTO account_transactions (accountId, type, amount, description, createdAt)
-           VALUES (?, 'withdraw', ?, ?, ?);`
-        ).run(
-          buyAccountId,
-          amountBuy,
-          `Order #${id} - Reversal of receipt from customer (${reasonLabel})`,
-          new Date().toISOString()
-        );
-      }
+  let directReceiptReversal = 0;
+  let directPaymentReversal = 0;
+  if (isCompleted) {
+    directReceiptReversal = outstandingDirectReversal(id, order.buyAccountId, "receipt", order.amountBuy);
+    if (directReceiptReversal > LEDGER_EPSILON) {
+      db.prepare("UPDATE accounts SET balance = balance - ? WHERE id = ?;").run(directReceiptReversal, order.buyAccountId);
+      db.prepare(
+        `INSERT INTO account_transactions (accountId, type, amount, description, createdAt)
+         VALUES (?, 'withdraw', ?, ?, ?);`
+      ).run(
+        order.buyAccountId,
+        directReceiptReversal,
+        `Order #${id} - Reversal of receipt from customer (${reasonLabel})`,
+        new Date().toISOString()
+      );
     }
 
-    if (order.sellAccountId && order.amountSell) {
-      const sellAccountId = order.sellAccountId;
-      const amountSell = Number(order.amountSell);
-      const hasPaymentReversal = payments.some((p) => p.accountId === sellAccountId);
-      if (!hasPaymentReversal && !isNaN(amountSell) && amountSell > 0) {
-        db.prepare("UPDATE accounts SET balance = balance + ? WHERE id = ?;").run(amountSell, sellAccountId);
-        db.prepare(
-          `INSERT INTO account_transactions (accountId, type, amount, description, createdAt)
-           VALUES (?, 'add', ?, ?, ?);`
-        ).run(
-          sellAccountId,
-          amountSell,
-          `Order #${id} - Reversal of payment to customer (${reasonLabel})`,
-          new Date().toISOString()
-        );
-      }
+    directPaymentReversal = outstandingDirectReversal(id, order.sellAccountId, "payment", order.amountSell);
+    if (directPaymentReversal > LEDGER_EPSILON) {
+      db.prepare("UPDATE accounts SET balance = balance + ? WHERE id = ?;").run(directPaymentReversal, order.sellAccountId);
+      db.prepare(
+        `INSERT INTO account_transactions (accountId, type, amount, description, createdAt)
+         VALUES (?, 'add', ?, ?, ?);`
+      ).run(
+        order.sellAccountId,
+        directPaymentReversal,
+        `Order #${id} - Reversal of payment to customer (${reasonLabel})`,
+        new Date().toISOString()
+      );
     }
   }
 
@@ -2446,22 +2485,8 @@ function performOrderFinancialReversals(orderId, order, reasonLabel) {
   payments.forEach((payment) => {
     if (payment.accountId) affectedAccountIds.add(payment.accountId);
   });
-  if (hasDirectTransactions) {
-    if (order.buyAccountId && order.amountBuy) {
-      const amountBuy = Number(order.amountBuy);
-      const hasReceiptReversal = receipts.some((r) => r.accountId === order.buyAccountId);
-      if (!hasReceiptReversal && !isNaN(amountBuy) && amountBuy > 0) {
-        affectedAccountIds.add(order.buyAccountId);
-      }
-    }
-    if (order.sellAccountId && order.amountSell) {
-      const amountSell = Number(order.amountSell);
-      const hasPaymentReversal = payments.some((p) => p.accountId === order.sellAccountId);
-      if (!hasPaymentReversal && !isNaN(amountSell) && amountSell > 0) {
-        affectedAccountIds.add(order.sellAccountId);
-      }
-    }
-  }
+  if (directReceiptReversal > LEDGER_EPSILON) affectedAccountIds.add(order.buyAccountId);
+  if (directPaymentReversal > LEDGER_EPSILON) affectedAccountIds.add(order.sellAccountId);
   profitReversals.forEach((profit) => {
     if (profit.accountId) affectedAccountIds.add(profit.accountId);
   });

@@ -639,6 +639,10 @@ export function useUnifiedOrderModal(
   const handleSave = async (e: FormEvent) => {
     e.preventDefault();
     if (isSaving || isSubmittingRef.current) return;
+    if (editingOrderId && orderDetails?.order?.status === "completed") {
+      alert("This order is already completed. Use Complete order to save changes.");
+      return;
+    }
     if (!customerName.trim() || !fromCurrency || !toCurrency) {
       alert("Customer name and currency pair are required.");
       return;

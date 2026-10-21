@@ -64,6 +64,7 @@ type Props = {
   handleNumberInputWheel: (e: React.WheelEvent<HTMLInputElement>) => void;
   onSave: (e: FormEvent) => void;
   onComplete: (e: FormEvent) => void;
+  editingOrderStatus?: string;
   onClose: () => void;
   onOpenCreateCustomer: () => void;
   onAutoFill: () => void;
@@ -470,6 +471,7 @@ export default function NewOrderModal({
   handleNumberInputWheel,
   onSave,
   onComplete,
+  editingOrderStatus,
   onClose,
   onOpenCreateCustomer,
   onAutoFill,
@@ -1279,14 +1281,16 @@ export default function NewOrderModal({
             >
               {t("common.cancel")}
             </button>
-            <button
-              type="button"
-              disabled={isSaving}
-              onClick={onSave}
-              className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-700 disabled:opacity-50"
-            >
-              {isSaving ? t("common.saving") : t("orders.saveOrder")}
-            </button>
+            {editingOrderStatus !== "completed" ? (
+              <button
+                type="button"
+                disabled={isSaving}
+                onClick={onSave}
+                className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-700 disabled:opacity-50"
+              >
+                {isSaving ? t("common.saving") : t("orders.saveOrder")}
+              </button>
+            ) : null}
             <button
               type="button"
               disabled={isSaving}

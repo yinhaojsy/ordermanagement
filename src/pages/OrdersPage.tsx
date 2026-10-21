@@ -1566,6 +1566,7 @@ export default function OrdersPage() {
         handleNumberInputWheel={handleNumberInputWheel}
         onSave={unifiedOrder.handleSave}
         onComplete={unifiedOrder.handleComplete}
+        editingOrderStatus={unifiedOrder.orderDetails?.order?.status}
         onClose={unifiedOrder.closeModal}
         onOpenCreateCustomer={() => setIsCreateCustomerModalOpen(true)}
         onAutoFill={unifiedOrder.fillReceiptPaymentFromTotals}
