@@ -26,6 +26,7 @@ import {
   APP_DOCUMENT_TITLE_EN_KEY,
   APP_DOCUMENT_TITLE_ZH_KEY,
 } from "../constants/appBrandSettings";
+import AutoBackupSettings from "../components/settings/AutoBackupSettings";
 
 export default function SettingsPage() {
   const { t } = useTranslation();
@@ -585,6 +586,8 @@ export default function SettingsPage() {
               ? t("settings.backupRestore.creatingBackup")
               : t("settings.backupRestore.createBackup")}
           </button>
+
+          <AutoBackupSettings />
 
           <div className="border-t border-slate-200 pt-4">
             <div className="mb-3 text-sm font-medium text-slate-700">

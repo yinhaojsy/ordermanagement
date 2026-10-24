@@ -13,6 +13,7 @@ const APP_DOCUMENT_TITLE_ZH_KEY = "app_document_title_zh";
 const APP_FAVICON_PATH_KEY = "app_favicon_path";
 import archiver from "archiver";
 import AdmZip from "adm-zip";
+import { BACKUP_BUSY_MESSAGE, releaseBackupLock, tryAcquireBackupLock } from "../services/backupLock.js";
 
 const isSafetyBackup = (file) =>
   typeof file === "string" && file.startsWith("pre-restore-") && file.endsWith(".db");
@@ -215,6 +216,18 @@ export const setSetting = (req, res, next) => {
 
 // Create backup (database only or with files)
 export const createBackup = (req, res, next) => {
+  if (!tryAcquireBackupLock()) {
+    return res.status(409).json({ message: BACKUP_BUSY_MESSAGE });
+  }
+  let released = false;
+  const releaseOnce = () => {
+    if (released) return;
+    released = true;
+    releaseBackupLock();
+  };
+  res.on("close", releaseOnce);
+  res.on("finish", releaseOnce);
+
   try {
     const { includeFiles } = req.body;
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -316,12 +329,102 @@ export const createBackup = (req, res, next) => {
     }
   } catch (error) {
     console.error("Backup error:", error);
+    releaseOnce();
     next(error);
   }
 };
 
+const holdBackupLock = (res) => {
+  if (!tryAcquireBackupLock()) {
+    res.status(409).json({ message: BACKUP_BUSY_MESSAGE });
+    return null;
+  }
+  let released = false;
+  const releaseOnce = () => {
+    if (released) return;
+    released = true;
+    releaseBackupLock();
+  };
+  res.on("close", releaseOnce);
+  res.on("finish", releaseOnce);
+  return releaseOnce;
+};
+
+/**
+ * Restore a backup that already lives on disk. Does not delete the source file.
+ */
+export function restoreExistingBackupFile(sourcePath) {
+  if (!tryAcquireBackupLock()) {
+    const error = new Error(BACKUP_BUSY_MESSAGE);
+    error.status = 409;
+    return Promise.reject(error);
+  }
+  let released = false;
+  const releaseOnce = () => {
+    if (released) return;
+    released = true;
+    releaseBackupLock();
+  };
+
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const safetyBackupPath = path.join(backupsDir, `pre-restore-${timestamp}.db`);
+  const isZip = sourcePath.toLowerCase().endsWith(".zip");
+
+  return new Promise((resolve, reject) => {
+    db.backup(safetyBackupPath)
+      .then(() => {
+        try {
+          if (isZip) {
+            const { restoredUploads } = restoreFromZipArchive(sourcePath, timestamp);
+            releaseOnce();
+            resolve({
+              message: restoredUploads
+                ? "Database and uploaded files restored successfully"
+                : "Database restored successfully (archive had no uploads folder)",
+              safetyBackup: safetyBackupPath,
+              restoredUploads,
+            });
+            return;
+          }
+          restoreDatabaseFromFile(sourcePath);
+          releaseOnce();
+          resolve({
+            message: "Database restored successfully",
+            safetyBackup: safetyBackupPath,
+          });
+        } catch (restoreErr) {
+          console.error("Restore error:", restoreErr);
+          try {
+            rollbackDatabaseFromSafety(safetyBackupPath);
+          } catch (rollbackErr) {
+            console.error("Database rollback error:", rollbackErr);
+            resetDbInstance();
+          }
+          releaseOnce();
+          reject(restoreErr);
+        }
+      })
+      .catch((err) => {
+        console.error("Safety backup error:", err);
+        if (fs.existsSync(safetyBackupPath)) {
+          try {
+            fs.unlinkSync(safetyBackupPath);
+          } catch {
+            // ignore cleanup errors
+          }
+        }
+        resetDbInstance();
+        releaseOnce();
+        const error = new Error("Error creating safety backup before restore");
+        error.status = 500;
+        reject(error);
+      });
+  });
+}
+
 // Restore from uploaded backup
 export const restoreBackup = (req, res, next) => {
+  let releaseOnce = () => {};
   try {
     if (!req.file) {
       return res.status(400).json({ message: "No backup file provided" });
@@ -347,6 +450,13 @@ export const restoreBackup = (req, res, next) => {
         message: "Database-only restore requires a .db backup file",
       });
     }
+
+    const acquired = holdBackupLock(res);
+    if (!acquired) {
+      fs.unlinkSync(uploadedFile.path);
+      return;
+    }
+    releaseOnce = acquired;
 
     const safetyBackupPath = path.join(backupsDir, `pre-restore-${timestamp}.db`);
 
@@ -412,6 +522,7 @@ export const restoreBackup = (req, res, next) => {
       });
   } catch (error) {
     console.error("Restore error:", error);
+    releaseOnce();
     next(error);
   }
 };
@@ -439,6 +550,9 @@ export const listSafetyBackups = (_req, res, next) => {
 
 // Restore from safety backup (latest or specified file)
 export const restoreSafetyBackup = (req, res, next) => {
+  if (!tryAcquireBackupLock()) {
+    return res.status(409).json({ message: BACKUP_BUSY_MESSAGE });
+  }
   try {
     const { file } = req.body || {};
     let target;
@@ -480,6 +594,8 @@ export const restoreSafetyBackup = (req, res, next) => {
     // Ensure database is open after failure
     resetDbInstance();
     next(error);
+  } finally {
+    releaseBackupLock();
   }
 };
 

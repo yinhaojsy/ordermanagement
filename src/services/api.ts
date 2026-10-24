@@ -127,7 +127,7 @@ function customerLedgerTagsForCustomer(customerId: number) {
 export const api = createApi({
   reducerPath: "api",
   baseQuery,
-  tagTypes: ["Currency", "Customer", "CustomerBeneficiary", "CustomerLedger", "CustomerKyc", "User", "Role", "Order", "Auth", "Account", "Transfer", "Expense", "ProfitCalculation", "Dividend", "DividendTemplate", "Setting", "PublicBranding", "Tag", "Notification", "Wallet", "ReferenceRates", "Integration", "AmlCheck"],
+  tagTypes: ["Currency", "Customer", "CustomerBeneficiary", "CustomerLedger", "CustomerKyc", "User", "Role", "Order", "Auth", "Account", "Transfer", "Expense", "ProfitCalculation", "Dividend", "DividendTemplate", "Setting", "PublicBranding", "Tag", "Notification", "Wallet", "ReferenceRates", "Integration", "AmlCheck", "AutoBackup"],
   refetchOnReconnect: true,
   endpoints: (builder) => ({
     getCurrencies: builder.query<Currency[], void>({
@@ -2225,6 +2225,94 @@ export const api = createApi({
       }),
       invalidatesTags: ["Currency", "Customer", "User", "Role", "Order", "Account", "Transfer", "Expense", "ProfitCalculation", "Tag"],
     }),
+    getAutoBackupSettings: builder.query<
+      {
+        saved: boolean;
+        settings: {
+          enabled: boolean;
+          frequency: "hourly" | "daily" | "weekly" | "monthly";
+          intervalHours: number;
+          time: string;
+          timezone: string;
+          weekday: number;
+          dayOfMonth: number;
+          endOfMonth: boolean;
+          includeFiles: boolean;
+          retentionCount: number;
+          nextRunAt: string | null;
+          lastRunAt: string | null;
+          lastStatus: "success" | "error" | null;
+          lastError: string | null;
+        };
+      },
+      void
+    >({
+      query: () => "settings/auto-backup",
+      providesTags: ["AutoBackup"],
+    }),
+    saveAutoBackupSettings: builder.mutation<
+      {
+        message: string;
+        settings: {
+          enabled: boolean;
+          frequency: "hourly" | "daily" | "weekly" | "monthly";
+          intervalHours: number;
+          time: string;
+          timezone: string;
+          weekday: number;
+          dayOfMonth: number;
+          endOfMonth: boolean;
+          includeFiles: boolean;
+          retentionCount: number;
+          nextRunAt: string | null;
+          lastRunAt: string | null;
+          lastStatus: "success" | "error" | null;
+          lastError: string | null;
+        };
+      },
+      {
+        enabled: boolean;
+        frequency: "hourly" | "daily" | "weekly" | "monthly";
+        intervalHours: number;
+        time: string;
+        timezone: string;
+        weekday: number;
+        dayOfMonth: number;
+        endOfMonth: boolean;
+        includeFiles: boolean;
+        retentionCount: number;
+      }
+    >({
+      query: (body) => ({
+        url: "settings/auto-backup",
+        method: "PUT",
+        body,
+      }),
+      invalidatesTags: ["AutoBackup"],
+    }),
+    listAutoBackups: builder.query<
+      { backups: Array<{ file: string; size: number; createdAt: string; includeFiles: boolean }> },
+      void
+    >({
+      query: () => "settings/auto-backup/files",
+      providesTags: ["AutoBackup"],
+    }),
+    deleteAutoBackup: builder.mutation<{ message: string; file: string }, { file: string }>({
+      query: (body) => ({
+        url: "settings/auto-backup/files/delete",
+        method: "POST",
+        body,
+      }),
+      invalidatesTags: ["AutoBackup"],
+    }),
+    restoreAutoBackup: builder.mutation<{ message: string; safetyBackup?: string }, { file: string }>({
+      query: (body) => ({
+        url: "settings/auto-backup/files/restore",
+        method: "POST",
+        body,
+      }),
+      invalidatesTags: ["Currency", "Customer", "User", "Role", "Order", "Account", "Transfer", "Expense", "ProfitCalculation", "Tag", "AutoBackup", "Setting", "PublicBranding"],
+    }),
     resetTableIds: builder.mutation<
       { results: Array<{ table: string; success: boolean; message: string; currentMaxId?: number }> },
       { tables: string[] }
@@ -2797,6 +2885,11 @@ export const {
     useRestoreSafetyBackupMutation,
     useListSafetyBackupsQuery,
     useDeleteSafetyBackupMutation,
+    useGetAutoBackupSettingsQuery,
+    useSaveAutoBackupSettingsMutation,
+    useListAutoBackupsQuery,
+    useDeleteAutoBackupMutation,
+    useRestoreAutoBackupMutation,
     useResetTableIdsMutation,
     useGetDbSchemaQuery,
     useExecuteQueryMutation,

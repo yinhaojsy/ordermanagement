@@ -190,6 +190,14 @@ import {
   clearDatabase,
 } from "../controllers/settingsController.js";
 import {
+  getAutoBackupSettings,
+  saveAutoBackupSettings,
+  listAutoBackups,
+  downloadAutoBackup,
+  deleteAutoBackup,
+  restoreAutoBackup,
+} from "../controllers/autoBackupController.js";
+import {
   listTags,
   createTag,
   updateTag,
@@ -531,6 +539,12 @@ protectedRouter.put("/profit-calculations/:id/unset-default", section("profit"),
 
 protectedRouter.post("/settings/branding/favicon", requireAdmin, uploadBrandingFavicon.single("file"), uploadSiteFavicon);
 protectedRouter.delete("/settings/branding/favicon", requireAdmin, deleteSiteFavicon);
+protectedRouter.get("/settings/auto-backup", requireAdmin, getAutoBackupSettings);
+protectedRouter.put("/settings/auto-backup", requireAdmin, saveAutoBackupSettings);
+protectedRouter.get("/settings/auto-backup/files", requireAdmin, listAutoBackups);
+protectedRouter.get("/settings/auto-backup/files/download", requireAdmin, downloadAutoBackup);
+protectedRouter.post("/settings/auto-backup/files/delete", requireAdmin, deleteAutoBackup);
+protectedRouter.post("/settings/auto-backup/files/restore", requireAdmin, restoreAutoBackup);
 protectedRouter.get("/settings/:key", requireAdmin, getSetting);
 protectedRouter.put("/settings", requireAdmin, setSetting);
 protectedRouter.post("/settings/backup", requireAdmin, createBackup);

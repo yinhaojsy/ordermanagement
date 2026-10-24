@@ -1,5 +1,6 @@
 import app from "./app.js";
 import { db } from "./db.js";
+import { startAutoBackupScheduler, stopAutoBackupScheduler } from "./services/autoBackup.js";
 import { registerTelegramWebhookIfConfigured } from "./services/telegram/telegramWebhookSetup.js";
 import { isTelegramBotConfigured } from "./services/telegram/telegramApi.js";
 import { isTelegramEnabled } from "./services/telegram/telegramConfig.js";
@@ -8,6 +9,7 @@ const PORT = process.env.PORT || 4000;
 
 const server = app.listen(PORT, () => {
   console.log(`API ready on http://localhost:${PORT}`);
+  startAutoBackupScheduler();
   console.log("Orders: DELETE /api/orders/:id uses direct delete (approval workflow removed). Restart this process after server code changes.");
   if (isTelegramEnabled() && isTelegramBotConfigured()) {
     console.log("Telegram: in-app Bot API enabled");
@@ -146,6 +148,7 @@ const gracefulShutdown = (signal) => {
   if (walletRefreshTimer) {
     stopWalletPolling();
   }
+  stopAutoBackupScheduler();
   
   // Set a timeout to force exit if graceful shutdown takes too long
   const shutdownTimeout = setTimeout(() => {
