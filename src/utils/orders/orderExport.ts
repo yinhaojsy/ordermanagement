@@ -1,34 +1,89 @@
 import * as XLSX from "xlsx";
 import type { OrderQueryParams } from "../../types/orders";
-import { formatOrderAccountsColumn } from "./orderAccounts";
+import { COF_ACCOUNT_LABEL, type OrderAccountLeg } from "./orderAccounts";
 
 type AmountCurrencyEntry = { amount: number; currency: string };
+type ChargeLeg = {
+  accountName?: string | null;
+  amount: number;
+  currency?: string | null;
+  isCof?: boolean;
+};
 
-function formatAmountEntries(
-  entries: AmountCurrencyEntry[] | null | undefined,
+function isPlaceholder(value: unknown): boolean {
+  return /^[-–—]+$/.test(String(value ?? "").trim());
+}
+
+function textCell(value: unknown): string {
+  const text = String(value ?? "").trim();
+  if (!text || isPlaceholder(text)) return "";
+  return text;
+}
+
+function formatLegAmount(value: number): string {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "0";
+  const text = n.toFixed(8).replace(/\.?0+$/, "");
+  return text === "-0" ? "0" : text;
+}
+
+/** Every receipt/payment leg, with the amount that hit that account. */
+function formatAccountLegs(
+  legs: OrderAccountLeg[] | null | undefined,
+  fallbackName: string | null | undefined,
+  fallbackAmount: number | null | undefined,
+  cofLabel: string,
+): string {
+  if (legs && legs.length > 0) {
+    return legs
+      .map((leg) => {
+        const name = leg.isCof ? cofLabel : textCell(leg.accountName);
+        if (!name || leg.amount == null || Number.isNaN(Number(leg.amount))) return "";
+        return `${name} ${formatLegAmount(Number(leg.amount))}`;
+      })
+      .filter(Boolean)
+      .join(", ");
+  }
+  const name = textCell(fallbackName);
+  if (!name) return "";
+  const amount = Number(fallbackAmount);
+  if (!Number.isFinite(amount)) return name;
+  return `${name} ${formatLegAmount(amount)}`;
+}
+
+function formatChargeColumns(
+  legs: ChargeLeg[] | null | undefined,
   fallbackAmount: number | null | undefined,
   fallbackCurrency: string | null | undefined,
-): { amount: string | number; currency: string } {
-  if (entries && entries.length > 0) {
+  fallbackAccount: string | null | undefined,
+  cofLabel: string,
+): { amount: string | number; currency: string; account: string } {
+  if (legs && legs.length > 0) {
     return {
-      amount: entries.map((e) => e.amount).join(", "),
-      currency: entries.map((e) => e.currency).join(", "),
+      amount: legs.map((leg) => formatLegAmount(Number(leg.amount))).join(", "),
+      currency: legs.map((leg) => textCell(leg.currency).toUpperCase()).join(", "),
+      account: legs
+        .map((leg) => (leg.isCof ? cofLabel : textCell(leg.accountName)))
+        .join(", "),
     };
   }
-  return {
-    amount: fallbackAmount ?? 0,
-    currency: fallbackCurrency || "-",
-  };
+  const amount = Number(fallbackAmount);
+  const currency = textCell(fallbackCurrency).toUpperCase();
+  const account = textCell(fallbackAccount);
+  if (!Number.isFinite(amount) || (amount === 0 && !currency && !account)) {
+    return { amount: "", currency: "", account: "" };
+  }
+  return { amount, currency, account };
 }
 
 /**
- * Exports orders to Excel file
+ * Exports orders to an Excel file that order import can read back.
+ * Buy Account and Sell Account list every leg as "Name amount".
  */
 export async function exportOrdersToExcel(
   queryParams: OrderQueryParams,
   t: (key: string) => string
 ): Promise<{ fileName: string; count: number }> {
-  // Build query string
   const queryString = new URLSearchParams();
   if (queryParams.dateFrom) queryString.append("dateFrom", queryParams.dateFrom);
   if (queryParams.dateTo) queryString.append("dateTo", queryParams.dateTo);
@@ -39,71 +94,66 @@ export async function exportOrdersToExcel(
   if (queryParams.status) queryString.append("status", queryParams.status);
   if (queryParams.tagIds) queryString.append("tagIds", queryParams.tagIds);
 
-  // Fetch orders
   const response = await fetch(`/api/orders/export?${queryString.toString()}`);
   if (!response.ok) {
     throw new Error(t("orders.exportError") || "Failed to export orders. Please try again.");
   }
 
   const orders = await response.json();
-
-  // Create workbook
+  const cofLabel = t("orders.cof") || COF_ACCOUNT_LABEL;
   const workbook = XLSX.utils.book_new();
 
-  // Prepare data for Excel
   const excelData = orders.map((order: any) => {
-    const profit = formatAmountEntries(
-      order.profitEntries,
+    const profit = formatChargeColumns(
+      order.profitLegs,
       order.profitAmount,
       order.profitCurrency,
+      order.profitAccountName,
+      cofLabel,
     );
-    const serviceCharge = formatAmountEntries(
-      order.serviceChargeEntries,
+    const serviceCharge = formatChargeColumns(
+      order.serviceChargeLegs,
       order.serviceChargeAmount,
       order.serviceChargeCurrency,
+      order.serviceChargeAccountName,
+      cofLabel,
     );
+    const orderType = textCell(order.orderType).toLowerCase();
 
     return {
       "Order ID": order.id,
       "Date": order.createdAt ? new Date(order.createdAt).toLocaleDateString() : "",
-      "Handler": order.handlerName || "-",
-      "Customer": order.customerName || "-",
+      "Handler": textCell(order.handlerName) || textCell(order.createdByName),
+      "Customer": textCell(order.customerName),
       "Currency Pair": `${order.fromCurrency}/${order.toCurrency}`,
       "Rate": order.rate,
       "Amount Buy": order.amountBuy,
       "From Currency": order.fromCurrency,
-      "Buy Account": formatOrderAccountsColumn(
-        order.buyAccounts,
-        t("orders.cof"),
-        order.buyAccountName,
-      ),
+      "Buy Account": formatAccountLegs(order.buyAccounts, order.buyAccountName, order.amountBuy, cofLabel),
       "Amount Sell": order.amountSell,
       "To Currency": order.toCurrency,
-      "Sell Account": formatOrderAccountsColumn(
-        order.sellAccounts,
-        t("orders.cof"),
-        order.sellAccountName,
-      ),
-      "Status": order.status,
+      "Sell Account": formatAccountLegs(order.sellAccounts, order.sellAccountName, order.amountSell, cofLabel),
+      "Status": textCell(order.status).toLowerCase(),
+      "Order Type": orderType === "otc" || orderType === "online" ? orderType : "",
       "Profit Amount": profit.amount,
       "Profit Currency": profit.currency,
-      "Service Charge Amount": serviceCharge.amount,
-      "Service Charge Currency": serviceCharge.currency,
-      "Tags": order.tags && order.tags.length > 0 ? order.tags.map((tag: any) => tag.name).join(", ") : "-",
+      "Profit Account": profit.account,
+      "Service Charges Amount": serviceCharge.amount,
+      "Service Charges Currency": serviceCharge.currency,
+      "Service Charges Account": serviceCharge.account,
+      "Tags":
+        order.tags && order.tags.length > 0
+          ? order.tags.map((tag: any) => textCell(tag.name)).filter(Boolean).join(", ")
+          : "",
       "Remarks": order.remarks?.trim() || "",
     };
   });
 
-  // Create worksheet
   const worksheet = XLSX.utils.json_to_sheet(excelData);
   XLSX.utils.book_append_sheet(workbook, worksheet, "Orders");
 
-  // Generate file name with date
   const fileName = `orders_export_${new Date().toISOString().split("T")[0]}.xlsx`;
-
-  // Write file
   XLSX.writeFile(workbook, fileName);
 
   return { fileName, count: orders.length };
 }
-

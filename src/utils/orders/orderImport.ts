@@ -1,6 +1,13 @@
 import * as XLSX from "xlsx";
 import type { OrderStatus, Order, Customer, User, Currency, Account, Tag } from "../../types";
 
+export interface ImportFundingLeg {
+  accountId: number | null;
+  amount: number;
+  isCof?: boolean;
+  currency?: string;
+}
+
 export interface ImportOrderData {
   customerId: number;
   handlerId: number;
@@ -11,21 +18,173 @@ export interface ImportOrderData {
   rate: number;
   status: OrderStatus;
   orderType: "online" | "otc";
-  buyAccountId: number;
-  sellAccountId: number;
+  buyAccountId: number | null;
+  sellAccountId: number | null;
+  buyLegs: ImportFundingLeg[];
+  sellLegs: ImportFundingLeg[];
   tagIds: number[];
   profitAmount?: number | null;
   profitCurrency?: string | null;
   profitAccountId?: number | null;
+  profitLegs?: ImportFundingLeg[];
   serviceChargeAmount?: number | null;
   serviceChargeCurrency?: string | null;
   serviceChargeAccountId?: number | null;
+  serviceChargeLegs?: ImportFundingLeg[];
 }
 
 export interface ImportValidationResult {
   success: boolean;
   errors: string[];
   orderData?: ImportOrderData;
+}
+
+const IMPORT_STATUSES: OrderStatus[] = ["saved", "completed", "cancelled"];
+const COF_NAMES = new Set(["cof"]);
+
+function blankText(value: unknown): string {
+  if (value === undefined || value === null) return "";
+  const text = String(value).trim();
+  if (!text || /^[-–—]+$/.test(text)) return "";
+  return text;
+}
+
+function cellList(value: unknown): string[] {
+  const text = blankText(value);
+  if (!text) return [];
+  return text.split(",").map((part) => part.trim()).filter(Boolean);
+}
+
+function isCofName(name: string): boolean {
+  return COF_NAMES.has(name.trim().toLowerCase());
+}
+
+function accountForCurrency(
+  accountsByName: Map<string, Account[]>,
+  name: string,
+  currency: string,
+): Account | undefined {
+  const list = accountsByName.get(name.toLowerCase()) || [];
+  if (list.length === 0) return undefined;
+  const wanted = currency.toUpperCase();
+  if (wanted) {
+    const match = list.find((account) => (account.currencyCode || "").toUpperCase() === wanted);
+    if (match) return match;
+  }
+  return list.length === 1 ? list[0] : undefined;
+}
+
+/** "Account Name 1250.5" or a bare account name. */
+function parseNamedAmount(part: string): { name: string; amount: number | null } {
+  const match = part.trim().match(/^(.*)\s+(-?\d+(?:\.\d+)?)$/);
+  if (!match) return { name: part.trim(), amount: null };
+  const name = match[1].trim();
+  const amount = parseFloat(match[2]);
+  if (!name || Number.isNaN(amount)) return { name: part.trim(), amount: null };
+  return { name, amount };
+}
+
+function resolveAccountLegs(
+  cell: unknown,
+  orderAmount: number,
+  currency: string,
+  accountsByName: Map<string, Account[]>,
+  rowNumber: number,
+  label: string,
+): { legs: ImportFundingLeg[]; primaryAccountId: number | null; error?: string } {
+  const parts = cellList(cell);
+  if (parts.length === 0) {
+    return { legs: [], primaryAccountId: null, error: `Row ${rowNumber}: ${label} is required` };
+  }
+  const parsed = parts.map(parseNamedAmount);
+  const legs: ImportFundingLeg[] = [];
+  for (const part of parsed) {
+    const amount = part.amount == null ? (parsed.length === 1 ? orderAmount : null) : part.amount;
+    if (amount == null || Number.isNaN(amount) || amount === 0) {
+      return {
+        legs: [],
+        primaryAccountId: null,
+        error: `Row ${rowNumber}: ${label} "${part.name}" must include an amount`,
+      };
+    }
+    if (isCofName(part.name)) {
+      legs.push({ accountId: null, amount, isCof: true });
+      continue;
+    }
+    const account = accountForCurrency(accountsByName, part.name, currency);
+    if (!account) {
+      return {
+        legs: [],
+        primaryAccountId: null,
+        error: `Row ${rowNumber}: ${label} "${part.name}" not found for ${currency}`,
+      };
+    }
+    if ((account.currencyCode || "").toUpperCase() !== currency) {
+      return {
+        legs: [],
+        primaryAccountId: null,
+        error: `Row ${rowNumber}: ${label} "${part.name}" currency (${account.currencyCode}) does not match ${currency}`,
+      };
+    }
+    legs.push({ accountId: account.id, amount, isCof: false });
+  }
+  const primary = legs.find((leg) => !leg.isCof && leg.accountId != null);
+  return { legs, primaryAccountId: primary?.accountId ?? null };
+}
+
+function resolveChargeLegs(
+  amountCell: unknown,
+  currencyCell: unknown,
+  accountCell: unknown,
+  accountsByName: Map<string, Account[]>,
+  rowNumber: number,
+  label: string,
+): { legs: ImportFundingLeg[]; error?: string } {
+  const amounts = cellList(amountCell);
+  const currencies = cellList(currencyCell);
+  const accounts = cellList(accountCell);
+  if (amounts.length === 0 && currencies.length === 0 && accounts.length === 0) {
+    return { legs: [] };
+  }
+  if (amounts.length === 1 && Number(amounts[0]) === 0 && currencies.length === 0 && accounts.length === 0) {
+    return { legs: [] };
+  }
+  const size = Math.max(amounts.length, currencies.length, accounts.length);
+  if (
+    (amounts.length > 0 && amounts.length !== size) ||
+    (currencies.length > 0 && currencies.length !== size) ||
+    (accounts.length > 0 && accounts.length !== size)
+  ) {
+    return { legs: [], error: `Row ${rowNumber}: ${label} amount, currency, and account counts must match` };
+  }
+  const legs: ImportFundingLeg[] = [];
+  for (let i = 0; i < size; i += 1) {
+    const amount = parseFloat(amounts[i] || "");
+    const currency = (currencies[i] || "").toUpperCase();
+    const accountName = accounts[i] || "";
+    if (Number.isNaN(amount) || amount === 0) {
+      return { legs: [], error: `Row ${rowNumber}: ${label} amount is invalid` };
+    }
+    if (!currency || !accountName) {
+      return { legs: [], error: `Row ${rowNumber}: ${label} amount, currency, and account must all be provided` };
+    }
+    if (isCofName(accountName)) {
+      legs.push({ accountId: null, amount, currency, isCof: true });
+      continue;
+    }
+    const account = accountForCurrency(accountsByName, accountName, currency);
+    if (!account) {
+      return { legs: [], error: `Row ${rowNumber}: ${label} account "${accountName}" not found for ${currency}` };
+    }
+    if ((account.currencyCode || "").toUpperCase() !== currency) {
+      return {
+        legs: [],
+        error: `Row ${rowNumber}: ${label} account "${accountName}" currency (${account.currencyCode}) must match ${currency}`,
+      };
+    }
+    legs.push({ accountId: account.id, amount, currency, isCof: false });
+  }
+  return { legs };
 }
 
 /**
@@ -39,7 +198,7 @@ export function validateAndParseOrderRow(
   activeCurrencyCodes: Set<string>,
   currencyPairSet: Set<string>,
   tagNameToId: Map<string, number>,
-  accountNameToAccount: Map<string, Account>,
+  accountsByName: Map<string, Account[]>,
   existingOrderIds: Set<string>,
   seenOrderIds: Set<string>
 ): ImportValidationResult {
@@ -61,16 +220,20 @@ export function validateAndParseOrderRow(
     return { success: false, errors };
   }
 
-  // Find customer by name
-  const customerName = String(row["Customer"] || row["customer"] || "").trim();
+  // Find customer by name. A dash is an empty placeholder, not a customer.
+  const customerName = blankText(row["Customer"] || row["customer"]);
+  if (!customerName) {
+    errors.push(`Row ${rowNumber}: Customer is required`);
+    return { success: false, errors };
+  }
   const customerId = customerMap.get(customerName.toLowerCase());
   if (!customerId) {
-    errors.push(`Row ${rowNumber}: Customer "${customerName || "?"}" not found`);
+    errors.push(`Row ${rowNumber}: Customer "${customerName}" not found`);
     return { success: false, errors };
   }
 
-  // Find handler by name (required)
-  const handlerName = String(row["Handler"] || row["handler"] || "").trim();
+  // Handler is the assigned user, or the creator when the order had no handler.
+  const handlerName = blankText(row["Handler"] || row["handler"]);
   if (!handlerName) {
     errors.push(`Row ${rowNumber}: Handler is required`);
     return { success: false, errors };
@@ -110,133 +273,81 @@ export function validateAndParseOrderRow(
     return { success: false, errors };
   }
 
-  // Parse required accounts
-  const buyAccountName = String(row["Buy Account"] || row["buyAccount"] || "").trim();
-  if (!buyAccountName) {
-    errors.push(`Row ${rowNumber}: Buy Account is required`);
-    return { success: false, errors };
-  }
-  const buyAccount = accountNameToAccount.get(buyAccountName.toLowerCase());
-  if (!buyAccount) {
-    errors.push(`Row ${rowNumber}: Buy Account "${buyAccountName}" not found`);
-    return { success: false, errors };
-  }
-  if ((buyAccount.currencyCode || "").toUpperCase() !== fromCurrency) {
-    errors.push(
-      `Row ${rowNumber}: Buy Account "${buyAccountName}" currency (${buyAccount.currencyCode}) does not match fromCurrency (${fromCurrency})`
-    );
+  const buySide = resolveAccountLegs(
+    row["Buy Account"] || row["buyAccount"],
+    amountBuy,
+    fromCurrency,
+    accountsByName,
+    rowNumber,
+    "Buy Account",
+  );
+  if (buySide.error) {
+    errors.push(buySide.error);
     return { success: false, errors };
   }
 
-  const sellAccountName = String(row["Sell Account"] || row["sellAccount"] || "").trim();
-  if (!sellAccountName) {
-    errors.push(`Row ${rowNumber}: Sell Account is required`);
-    return { success: false, errors };
-  }
-  const sellAccount = accountNameToAccount.get(sellAccountName.toLowerCase());
-  if (!sellAccount) {
-    errors.push(`Row ${rowNumber}: Sell Account "${sellAccountName}" not found`);
-    return { success: false, errors };
-  }
-  if ((sellAccount.currencyCode || "").toUpperCase() !== toCurrency) {
-    errors.push(
-      `Row ${rowNumber}: Sell Account "${sellAccountName}" currency (${sellAccount.currencyCode}) does not match toCurrency (${toCurrency})`
-    );
+  const sellSide = resolveAccountLegs(
+    row["Sell Account"] || row["sellAccount"],
+    amountSell,
+    toCurrency,
+    accountsByName,
+    rowNumber,
+    "Sell Account",
+  );
+  if (sellSide.error) {
+    errors.push(sellSide.error);
     return { success: false, errors };
   }
 
-  // Parse optional profit
-  const profitAmountRaw = row["Profit Amount"] ?? row["profitAmount"];
-  const profitAmount =
-    profitAmountRaw === undefined || profitAmountRaw === null || String(profitAmountRaw).trim() === ""
-      ? null
-      : parseFloat(profitAmountRaw);
-  const profitCurrencyRaw = String(row["Profit Currency"] || row["profitCurrency"] || "").trim();
-  const profitCurrency = profitCurrencyRaw ? profitCurrencyRaw.toUpperCase() : "";
-  const profitAccountName = String(row["Profit Account"] || row["profitAccount"] || "").trim();
-  if (profitAmount !== null && Number.isNaN(profitAmount)) {
-    errors.push(`Row ${rowNumber}: Profit Amount is invalid`);
+  const profitSide = resolveChargeLegs(
+    row["Profit Amount"] ?? row["profitAmount"],
+    row["Profit Currency"] || row["profitCurrency"],
+    row["Profit Account"] || row["profitAccount"],
+    accountsByName,
+    rowNumber,
+    "Profit",
+  );
+  if (profitSide.error) {
+    errors.push(profitSide.error);
     return { success: false, errors };
   }
-  if (
-    (profitAmount !== null && (!profitAccountName || !profitCurrency)) ||
-    (profitAmount === null && (profitAccountName || profitCurrency))
-  ) {
-    errors.push(`Row ${rowNumber}: Profit amount, currency, and account must all be provided or all be empty`);
-    return { success: false, errors };
-  }
-  const profitAccount =
-    profitAmount !== null || profitAccountName ? accountNameToAccount.get(profitAccountName.toLowerCase()) : null;
-  if (profitAccountName && !profitAccount) {
-    errors.push(`Row ${rowNumber}: Profit Account "${profitAccountName}" not found`);
-    return { success: false, errors };
-  }
-  if (profitAccount && profitCurrency && (profitAccount.currencyCode || "").toUpperCase() !== profitCurrency) {
-    errors.push(
-      `Row ${rowNumber}: Profit Account "${profitAccountName}" currency (${profitAccount.currencyCode}) must match profit currency (${profitCurrency})`
-    );
-    return { success: false, errors };
-  }
+  const profitLegs = profitSide.legs;
+  const firstProfit = profitLegs[0];
 
-  // Parse optional service charges
-  const serviceChargeAmountRaw = row["Service Charges Amount"] ?? row["Service Charge Amount"] ?? row["serviceChargeAmount"];
-  const serviceChargeAmount =
-    serviceChargeAmountRaw === undefined ||
-    serviceChargeAmountRaw === null ||
-    String(serviceChargeAmountRaw).trim() === ""
-      ? null
-      : parseFloat(serviceChargeAmountRaw);
-  const serviceChargeCurrencyRaw = String(
-    row["Service Charges Currency"] || row["Service Charge Currency"] || row["serviceChargeCurrency"] || ""
-  ).trim();
-  const serviceChargeCurrency = serviceChargeCurrencyRaw ? serviceChargeCurrencyRaw.toUpperCase() : "";
-  const serviceChargeAccountName = String(
-    row["Service Charges Account"] || row["Service Charge Account"] || row["serviceChargeAccount"] || ""
-  ).trim();
-  if (serviceChargeAmount !== null && Number.isNaN(serviceChargeAmount)) {
-    errors.push(`Row ${rowNumber}: Service Charges Amount is invalid`);
+  const serviceChargeSide = resolveChargeLegs(
+    row["Service Charges Amount"] ?? row["Service Charge Amount"] ?? row["serviceChargeAmount"],
+    row["Service Charges Currency"] || row["Service Charge Currency"] || row["serviceChargeCurrency"],
+    row["Service Charges Account"] || row["Service Charge Account"] || row["serviceChargeAccount"],
+    accountsByName,
+    rowNumber,
+    "Service charges",
+  );
+  if (serviceChargeSide.error) {
+    errors.push(serviceChargeSide.error);
     return { success: false, errors };
   }
-  if ((serviceChargeAmount !== null && !serviceChargeAccountName) || (serviceChargeAmount === null && serviceChargeAccountName)) {
-    errors.push(
-      `Row ${rowNumber}: Service charges amount, currency, and account must all be provided or all be empty`
-    );
-    return { success: false, errors };
-  }
-  const serviceChargeAccount =
-    serviceChargeAmount !== null || serviceChargeAccountName
-      ? accountNameToAccount.get(serviceChargeAccountName.toLowerCase())
-      : null;
-  if (serviceChargeAccountName && !serviceChargeAccount) {
-    errors.push(`Row ${rowNumber}: Service Charges Account "${serviceChargeAccountName}" not found`);
-    return { success: false, errors };
-  }
-  if (serviceChargeAccount && serviceChargeCurrency && (serviceChargeAccount.currencyCode || "").toUpperCase() !== serviceChargeCurrency) {
-    errors.push(
-      `Row ${rowNumber}: Service Charges Account "${serviceChargeAccountName}" currency (${serviceChargeAccount.currencyCode}) must match service charges currency (${serviceChargeCurrency})`
-    );
-    return { success: false, errors };
-  }
+  const serviceChargeLegs = serviceChargeSide.legs;
+  const firstServiceCharge = serviceChargeLegs[0];
 
   // Parse status
-  const statusStr = String(row["Status"] || row["status"] || "").trim().toLowerCase();
-  if (statusStr !== "completed") {
-    errors.push(`Row ${rowNumber}: Status must be "completed"`);
+  const statusStr = blankText(row["Status"] || row["status"]).toLowerCase();
+  if (!IMPORT_STATUSES.includes(statusStr as OrderStatus)) {
+    errors.push(`Row ${rowNumber}: Status must be saved, completed, or cancelled`);
     return { success: false, errors };
   }
-  const status: OrderStatus = "completed";
+  const status = statusStr as OrderStatus;
 
   // Optional legacy column: default to online when missing or invalid
-  const orderTypeStr = String(row["Order Type"] || row["OrderType"] || row["orderType"] || "").trim().toLowerCase();
+  const orderTypeStr = blankText(row["Order Type"] || row["OrderType"] || row["orderType"]).toLowerCase();
   const orderType: "online" | "otc" = orderTypeStr === "otc" ? "otc" : "online";
 
-  // Parse tags (optional) and validate existence
-  const rawTags = row["Tags"] ?? row["tags"];
+  // Parse tags (optional). A dash means no tags.
+  const rawTags = blankText(row["Tags"] ?? row["tags"]);
   const tagIds: number[] = [];
-  if (rawTags !== undefined && rawTags !== null && String(rawTags).trim() !== "") {
-    const tagNames = String(rawTags)
+  if (rawTags) {
+    const tagNames = rawTags
       .split(",")
-      .map((t) => t.trim())
+      .map((t) => blankText(t))
       .filter(Boolean);
 
     for (const tagName of tagNames) {
@@ -262,21 +373,25 @@ export function validateAndParseOrderRow(
     rate,
     status,
     orderType,
-    buyAccountId: buyAccount.id,
-    sellAccountId: sellAccount.id,
+    buyAccountId: buySide.primaryAccountId,
+    sellAccountId: sellSide.primaryAccountId,
+    buyLegs: buySide.legs,
+    sellLegs: sellSide.legs,
     tagIds,
-    ...(profitAmount !== null && profitAccount
+    ...(profitLegs.length > 0 ? { profitLegs } : {}),
+    ...(firstProfit && !firstProfit.isCof && firstProfit.accountId != null
       ? {
-          profitAmount,
-          profitCurrency: profitCurrency || profitAccount.currencyCode,
-          profitAccountId: profitAccount.id,
+          profitAmount: firstProfit.amount,
+          profitCurrency: firstProfit.currency,
+          profitAccountId: firstProfit.accountId,
         }
       : {}),
-    ...(serviceChargeAmount !== null && serviceChargeAccount
+    ...(serviceChargeLegs.length > 0 ? { serviceChargeLegs } : {}),
+    ...(firstServiceCharge && !firstServiceCharge.isCof && firstServiceCharge.accountId != null
       ? {
-          serviceChargeAmount,
-          serviceChargeCurrency: serviceChargeCurrency || serviceChargeAccount.currencyCode,
-          serviceChargeAccountId: serviceChargeAccount.id,
+          serviceChargeAmount: firstServiceCharge.amount,
+          serviceChargeCurrency: firstServiceCharge.currency,
+          serviceChargeAccountId: firstServiceCharge.accountId,
         }
       : {}),
   };
@@ -318,7 +433,13 @@ export async function processImportFile(
   const activeCurrencyCodes = new Set(currencies.filter((c) => c.active).map((c) => c.code.toUpperCase()));
   const currencyPairSet = new Set(currencyPairs.map((p) => p.toUpperCase()));
   const tagNameToId = new Map(tags.map((t) => [t.name.toLowerCase(), t.id]));
-  const accountNameToAccount = new Map(accounts.map((a) => [a.name.toLowerCase(), a]));
+  const accountsByName = new Map<string, Account[]>();
+  for (const account of accounts) {
+    const key = account.name.toLowerCase();
+    const list = accountsByName.get(key) || [];
+    list.push(account);
+    accountsByName.set(key, list);
+  }
 
   // Fetch existing orders to prevent importing duplicates by Order ID
   const existingOrdersResponse = await fetch("/api/orders/export");
@@ -345,7 +466,7 @@ export async function processImportFile(
       activeCurrencyCodes,
       currencyPairSet,
       tagNameToId,
-      accountNameToAccount,
+      accountsByName,
       existingOrderIds,
       seenOrderIds
     );

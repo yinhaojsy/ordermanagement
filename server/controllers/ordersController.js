@@ -377,6 +377,52 @@ function buildSellAccountsForOrder(orderId) {
   }));
 }
 
+function buildServiceChargeLegsForOrder(orderId) {
+  return db
+    .prepare(
+      `SELECT sc.accountId AS accountId, a.name AS accountName, SUM(sc.amount) AS totalAmount,
+              sc.currencyCode AS currencyCode, sc.fundedFrom AS fundedFrom
+       FROM order_service_charges sc
+       LEFT JOIN accounts a ON a.id = sc.accountId
+       WHERE sc.orderId = ? AND sc.status = 'confirmed'
+       GROUP BY sc.accountId, a.name, sc.currencyCode, sc.fundedFrom
+       ORDER BY MIN(sc.createdAt) ASC;`,
+    )
+    .all(orderId)
+    .map((row) => ({
+      accountId: row.fundedFrom === "customer_balance" ? null : row.accountId,
+      accountName: row.fundedFrom === "customer_balance" ? COF_ACCOUNT_LABEL : (row.accountName || `Account #${row.accountId}`),
+      amount: Number(row.totalAmount),
+      currency: row.currencyCode,
+      isCof: row.fundedFrom === "customer_balance",
+    }));
+}
+
+function buildProfitLegsForOrder(orderId) {
+  return db
+    .prepare(
+      `SELECT p.accountId AS accountId, a.name AS accountName, SUM(p.amount) AS totalAmount,
+              p.currencyCode AS currencyCode
+       FROM order_profits p
+       LEFT JOIN accounts a ON a.id = p.accountId
+       WHERE p.orderId = ? AND p.status = 'confirmed'
+       GROUP BY p.accountId, a.name, p.currencyCode
+       ORDER BY MIN(p.createdAt) ASC;`,
+    )
+    .all(orderId)
+    .map((row) => ({
+      accountId: row.accountId,
+      accountName: row.accountName || `Account #${row.accountId}`,
+      amount: Number(row.totalAmount),
+      currency: row.currencyCode,
+      isCof: false,
+    }));
+}
+
+function accountNameByIdMap() {
+  return new Map(db.prepare("SELECT id, name FROM accounts;").all().map((account) => [account.id, account.name]));
+}
+
 /** Filter orders where any account name matches keyword (receipts, payments, SC, profit, legacy). */
 function appendOrderAccountSearchFilter(conditions, params, searchRaw) {
   const q = String(searchRaw || "").trim().toLowerCase();
@@ -1127,7 +1173,8 @@ export const exportOrders = (req, res) => {
   `;
 
   const rows = db.prepare(query).all(params);
-  
+  const exportAccountNames = accountNameByIdMap();
+
   // Parse JSON fields and check for beneficiaries (same logic as listOrders)
   const orders = rows.map((rawRow) => {
     const { pinSortOrder, ...order } = rawRow;
@@ -1154,6 +1201,8 @@ export const exportOrders = (req, res) => {
         .all(order.id);
 
       const profitAndCharges = resolveOrderProfitAndServiceCharges(order);
+      const serviceChargeLegs = buildServiceChargeLegsForOrder(order.id);
+      const profitLegs = buildProfitLegsForOrder(order.id);
 
       return {
         ...order,
@@ -1165,6 +1214,16 @@ export const exportOrders = (req, res) => {
         buyAccounts: buyAccounts.length > 0 ? buyAccounts : null,
         sellAccounts: sellAccounts.length > 0 ? sellAccounts : null,
         tags: tags.length > 0 ? tags : [],
+        serviceChargeLegs,
+        profitLegs,
+        profitAccountName:
+          profitAndCharges.profitAccountId != null
+            ? exportAccountNames.get(profitAndCharges.profitAccountId) ?? null
+            : null,
+        serviceChargeAccountName:
+          profitAndCharges.serviceChargeAccountId != null
+            ? exportAccountNames.get(profitAndCharges.serviceChargeAccountId) ?? null
+            : null,
         ...profitAndCharges,
       };
     } catch (e) {
@@ -1182,6 +1241,8 @@ export const exportOrders = (req, res) => {
       const profitAndCharges = resolveOrderProfitAndServiceCharges(order, {
         includeDraftFallback: false,
       });
+      const serviceChargeLegs = buildServiceChargeLegsForOrder(order.id);
+      const profitLegs = buildProfitLegsForOrder(order.id);
 
       return {
         ...order,
@@ -1193,11 +1254,21 @@ export const exportOrders = (req, res) => {
         buyAccounts: null,
         sellAccounts: null,
         tags: tags.length > 0 ? tags : [],
+        serviceChargeLegs,
+        profitLegs,
+        profitAccountName:
+          profitAndCharges.profitAccountId != null
+            ? exportAccountNames.get(profitAndCharges.profitAccountId) ?? null
+            : null,
+        serviceChargeAccountName:
+          profitAndCharges.serviceChargeAccountId != null
+            ? exportAccountNames.get(profitAndCharges.serviceChargeAccountId) ?? null
+            : null,
         ...profitAndCharges,
       };
     }
   });
-  
+
   res.json(orders);
 };
 
@@ -1306,7 +1377,11 @@ export const reorderPinnedOrders = (req, res) => {
 export const createOrder = async (req, res, next) => {
   try {
     const payload = req.body || {};
-    const { tagIds, ...orderData } = payload;
+    const { tagIds, buyLegs, sellLegs, profitLegs, serviceChargeLegs, ...orderData } = payload;
+    const importedBuyLegs = Array.isArray(buyLegs) ? buyLegs : [];
+    const importedSellLegs = Array.isArray(sellLegs) ? sellLegs : [];
+    const importedProfitLegs = Array.isArray(profitLegs) ? profitLegs : [];
+    const importedServiceChargeLegs = Array.isArray(serviceChargeLegs) ? serviceChargeLegs : [];
     const userId = getUserIdFromHeader(req);
     
     if (!userId) {
@@ -1641,15 +1716,23 @@ export const createOrder = async (req, res, next) => {
     console.log(`[createOrder] Order ${orderId} created - Status: ${finalStatus}, buyAccountId: ${actualBuyAccountId}, sellAccountId: ${actualSellAccountId}`);
     
     if (finalStatus === "completed") {
-      // Update account balances for buy/sell accounts
-      if (actualBuyAccountId || actualSellAccountId) {
+      // Leg imports post each account's own amount. The full order amount is not posted again.
+      if (importedBuyLegs.length > 0 || importedSellLegs.length > 0) {
+        try {
+          applyImportedFundingLegs(orderId, {
+            buyLegs: importedBuyLegs,
+            sellLegs: importedSellLegs,
+          });
+        } catch (error) {
+          console.error(`[createOrder] Error applying imported account legs for order ${orderId}:`, error);
+        }
+      } else if (actualBuyAccountId || actualSellAccountId) {
         try {
           console.log(`[createOrder] Calling updateAccountBalancesOnCompletion for order ${orderId} (imported)`);
           updateAccountBalancesOnCompletion(orderId, true);
           console.log(`[createOrder] Successfully updated account balances for order ${orderId}`);
         } catch (error) {
           console.error(`[createOrder] Error updating account balances for order ${orderId}:`, error);
-          // Don't fail the order creation, but log the error
         }
       } else {
         console.log(`[createOrder] Order ${orderId} is completed but has no accounts set, skipping balance update`);
@@ -1657,9 +1740,20 @@ export const createOrder = async (req, res, next) => {
 
       trySyncCompletedOrderLedger(orderId, userId);
 
+      if (importedProfitLegs.length > 0 || importedServiceChargeLegs.length > 0) {
+        try {
+          applyImportedFundingLegs(orderId, {
+            profitLegs: importedProfitLegs,
+            serviceChargeLegs: importedServiceChargeLegs,
+          });
+        } catch (error) {
+          console.error(`[createOrder] Error applying imported charge legs for order ${orderId}:`, error);
+        }
+      }
+
       // Handle profit account balance if provided
       // Skip for OTC orders since they're already handled in the OTC block above
-      if (orderData.orderType !== "otc" && orderData.profitAmount !== null && orderData.profitAmount !== undefined && orderData.profitAccountId) {
+      if (importedProfitLegs.length === 0 && orderData.orderType !== "otc" && orderData.profitAmount !== null && orderData.profitAmount !== undefined && orderData.profitAccountId) {
         const profitAmount = Number(orderData.profitAmount);
         if (!isNaN(profitAmount) && profitAmount > 0) {
           db.prepare("UPDATE accounts SET balance = balance + ? WHERE id = ?;").run(profitAmount, orderData.profitAccountId);
@@ -1677,7 +1771,7 @@ export const createOrder = async (req, res, next) => {
       
       // Handle service charge account balance if provided
       // Skip for OTC orders since they're already handled in the OTC block above
-      if (orderData.orderType !== "otc" && orderData.serviceChargeAmount !== null && orderData.serviceChargeAmount !== undefined && orderData.serviceChargeAccountId) {
+      if (importedServiceChargeLegs.length === 0 && orderData.orderType !== "otc" && orderData.serviceChargeAmount !== null && orderData.serviceChargeAmount !== undefined && orderData.serviceChargeAccountId) {
         const serviceChargeAmount = Number(orderData.serviceChargeAmount);
         if (!isNaN(serviceChargeAmount) && serviceChargeAmount !== 0) {
           if (serviceChargeAmount > 0) {
@@ -3075,6 +3169,85 @@ export const addBeneficiary = (req, res, next) => {
     next(error);
   }
 };
+
+/** Post each imported leg to its own account. Does not book the full order amount. */
+function applyImportedFundingLegs(orderId, { buyLegs = [], sellLegs = [], profitLegs = [], serviceChargeLegs = [] } = {}) {
+  const now = new Date().toISOString();
+  const insertReceipt = db.prepare(
+    `INSERT INTO order_receipts (orderId, imagePath, amount, accountId, status, fundedFrom, createdAt)
+     VALUES (?, 'OTC_NO_IMAGE', ?, ?, 'confirmed', ?, ?);`,
+  );
+  const insertPayment = db.prepare(
+    `INSERT INTO order_payments (orderId, imagePath, amount, accountId, status, fundedFrom, createdAt)
+     VALUES (?, 'OTC_NO_IMAGE', ?, ?, 'confirmed', ?, ?);`,
+  );
+  const insertTx = db.prepare(
+    `INSERT INTO account_transactions (accountId, type, amount, description, createdAt)
+     VALUES (?, ?, ?, ?, ?);`,
+  );
+
+  for (const leg of buyLegs) {
+    const amount = Number(leg.amount);
+    if (!Number.isFinite(amount) || amount === 0) continue;
+    const isCof = Boolean(leg.isCof);
+    insertReceipt.run(orderId, amount, isCof ? null : leg.accountId, isCof ? "customer_balance" : "cash", now);
+    if (!isCof && leg.accountId) {
+      db.prepare("UPDATE accounts SET balance = balance + ? WHERE id = ?;").run(amount, leg.accountId);
+      insertTx.run(leg.accountId, "add", amount, `Order #${orderId} - Receipt from customer (Imported)`, now);
+    }
+  }
+
+  for (const leg of sellLegs) {
+    const amount = Number(leg.amount);
+    if (!Number.isFinite(amount) || amount === 0) continue;
+    const isCof = Boolean(leg.isCof);
+    insertPayment.run(orderId, amount, isCof ? null : leg.accountId, isCof ? "customer_balance" : "cash", now);
+    if (!isCof && leg.accountId) {
+      const account = db.prepare("SELECT balance FROM accounts WHERE id = ?;").get(leg.accountId);
+      if (!account) continue;
+      db.prepare("UPDATE accounts SET balance = ? WHERE id = ?;").run(account.balance - amount, leg.accountId);
+      insertTx.run(leg.accountId, "withdraw", amount, `Order #${orderId} - Payment to customer (Imported)`, now);
+    }
+  }
+
+  const insertProfit = db.prepare(
+    `INSERT INTO order_profits (orderId, amount, currencyCode, accountId, status, createdAt)
+     VALUES (?, ?, ?, ?, 'confirmed', ?);`,
+  );
+  for (const leg of profitLegs) {
+    const amount = Number(leg.amount);
+    if (!Number.isFinite(amount) || amount === 0 || !leg.accountId) continue;
+    insertProfit.run(orderId, amount, leg.currency, leg.accountId, now);
+    if (amount > 0) {
+      db.prepare("UPDATE accounts SET balance = balance + ? WHERE id = ?;").run(amount, leg.accountId);
+      insertTx.run(leg.accountId, "add", amount, `Order #${orderId} - Profit (Imported)`, now);
+    }
+  }
+
+  const insertServiceCharge = db.prepare(
+    `INSERT INTO order_service_charges (orderId, amount, currencyCode, accountId, status, fundedFrom, createdAt)
+     VALUES (?, ?, ?, ?, 'confirmed', ?, ?);`,
+  );
+  for (const leg of serviceChargeLegs) {
+    const amount = Number(leg.amount);
+    if (!Number.isFinite(amount) || amount === 0) continue;
+    const isCof = Boolean(leg.isCof);
+    insertServiceCharge.run(
+      orderId,
+      amount,
+      leg.currency,
+      isCof ? null : leg.accountId,
+      isCof ? "customer_balance" : "cash",
+      now,
+    );
+    if (!isCof) {
+      applyCashServiceChargeAccountEffects(
+        { accountId: leg.accountId, amount, fundedFrom: "cash" },
+        orderId,
+      );
+    }
+  }
+}
 
 // Helper function to update account balances when order is completed
 const updateAccountBalancesOnCompletion = (orderId, isImported = false) => {
