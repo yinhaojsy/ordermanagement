@@ -1,4 +1,5 @@
 import * as XLSX from "xlsx";
+import { formatExportDate } from "../importExportDate";
 import type { OrderQueryParams } from "../../types/orders";
 import { COF_ACCOUNT_LABEL, type OrderAccountLeg } from "./orderAccounts";
 
@@ -122,7 +123,7 @@ export async function exportOrdersToExcel(
 
     return {
       "Order ID": order.id,
-      "Date": order.createdAt ? new Date(order.createdAt).toLocaleDateString() : "",
+      "Date": formatExportDate(order.orderDate || order.createdAt),
       "Handler": textCell(order.handlerName) || textCell(order.createdByName),
       "Customer": textCell(order.customerName),
       "Currency Pair": `${order.fromCurrency}/${order.toCurrency}`,

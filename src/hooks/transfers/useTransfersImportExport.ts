@@ -55,6 +55,7 @@ export function useTransfersImportExport({
     const templateData = [
       {
         "Transfer ID": "TRF-1001",
+        "Date": "2026-10-26",
         "From Account": "Main USD",
         "To Account": "Secondary USD",
         "Amount": 1000,
@@ -66,6 +67,7 @@ export function useTransfersImportExport({
       },
       {
         "Transfer ID": "TRF-1002",
+        "Date": "2026-10-26",
         "From Account": "Main HKD",
         "To Account": "Secondary HKD",
         "Amount": 5000,

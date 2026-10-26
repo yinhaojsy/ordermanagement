@@ -1,4 +1,5 @@
 import * as XLSX from "xlsx";
+import { formatExportDate } from "../importExportDate";
 
 export interface TransferQueryParams {
   dateFrom?: string;
@@ -41,7 +42,7 @@ export async function exportTransfersToExcel(
   // Prepare data for Excel
   const excelData = transfers.map((transfer: any) => ({
     "Transfer ID": transfer.id,
-    "Date": transfer.createdAt ? new Date(transfer.createdAt).toLocaleDateString() : "",
+    "Date": formatExportDate(transfer.entryDate || transfer.createdAt),
     "From Account": transfer.fromAccountName || "",
     "To Account": transfer.toAccountName || "",
     "Amount": transfer.amount,

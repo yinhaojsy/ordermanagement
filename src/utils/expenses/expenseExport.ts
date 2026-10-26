@@ -1,4 +1,5 @@
 import * as XLSX from "xlsx";
+import { formatExportDate } from "../importExportDate";
 
 export interface ExpenseQueryParams {
   dateFrom?: string;
@@ -40,7 +41,7 @@ export async function exportExpensesToExcel(
   const excelData = expenses.map((expense: any) => ({
     "Expense ID": expense.id,
     "Type": expense.type === 'income' ? 'Income' : 'Expense',
-    "Date": expense.createdAt ? new Date(expense.createdAt).toLocaleDateString() : "",
+    "Date": formatExportDate(expense.entryDate || expense.createdAt),
     "Account": expense.accountName || "",
     "Amount": expense.amount,
     "Currency": expense.currencyCode || "",

@@ -1,5 +1,6 @@
 import * as XLSX from "xlsx";
 import type { OrderStatus, Order, Customer, User, Currency, Account, Tag } from "../../types";
+import { parseImportDate } from "../importExportDate";
 
 export interface ImportFundingLeg {
   accountId: number | null;
@@ -31,6 +32,7 @@ export interface ImportOrderData {
   serviceChargeCurrency?: string | null;
   serviceChargeAccountId?: number | null;
   serviceChargeLegs?: ImportFundingLeg[];
+  orderDate?: string;
 }
 
 export interface ImportValidationResult {
@@ -362,6 +364,12 @@ export function validateAndParseOrderRow(
     }
   }
 
+  const parsedDate = parseImportDate(row["Date"] ?? row["date"]);
+  if (parsedDate === undefined) {
+    errors.push(`Row ${rowNumber}: Date must be YYYY-MM-DD`);
+    return { success: false, errors };
+  }
+
   // Build order data
   const orderData: ImportOrderData = {
     customerId,
@@ -394,6 +402,7 @@ export function validateAndParseOrderRow(
           serviceChargeAccountId: firstServiceCharge.accountId,
         }
       : {}),
+    ...(parsedDate ? { orderDate: parsedDate } : {}),
   };
 
   return { success: true, errors: [], orderData };
@@ -421,7 +430,7 @@ export async function processImportFile(
     throw new Error("Orders sheet not found in the file");
   }
 
-  const ordersData = XLSX.utils.sheet_to_json(ordersSheet) as any[];
+  const ordersData = XLSX.utils.sheet_to_json(ordersSheet, { cellDates: true }) as any[];
 
   if (ordersData.length === 0) {
     throw new Error("No orders found in the file");

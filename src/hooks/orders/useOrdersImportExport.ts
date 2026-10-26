@@ -61,6 +61,7 @@ export function useOrdersImportExport({
     const templateData = [
       {
         "Order ID": "EXT-1001",
+        "Date": "2026-10-26",
         "Customer": "Example Customer",
         "Handler": "John Doe",
         "Currency Pair": "USD/HKD",
@@ -81,6 +82,7 @@ export function useOrdersImportExport({
       },
       {
         "Order ID": "EXT-1002",
+        "Date": "2026-10-26",
         "Customer": "Another Customer",
         "Handler": "Jane Smith",
         "Currency Pair": "USDT/USD",

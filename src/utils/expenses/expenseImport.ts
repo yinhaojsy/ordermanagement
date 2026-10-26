@@ -5,6 +5,7 @@ import {
   groupAccountsByName,
   matchAccountInCurrency,
 } from "../accounts/matchAccountForImport";
+import { parseImportDate } from "../importExportDate";
 
 export interface ImportExpenseData {
   accountId: number;
@@ -13,6 +14,8 @@ export interface ImportExpenseData {
   tagIds: number[];
   currencyCode?: string;
   createdBy?: number;
+  createdAt?: string;
+  entryDate?: string;
 }
 
 export interface ImportValidationResult {
@@ -48,6 +51,12 @@ export function validateAndParseExpenseRow(
       return { success: false, errors };
     }
     seenExpenseIds.add(normalizedExpenseId);
+  }
+
+  const parsedDate = parseImportDate(row["Date"] ?? row["date"]);
+  if (parsedDate === undefined) {
+    errors.push(`Row ${rowNumber}: Date must be YYYY-MM-DD`);
+    return { success: false, errors };
   }
 
   const currencyCodeRaw = String(row["Currency"] || row["currency"] || row["currencyCode"] || "").trim();
@@ -124,8 +133,6 @@ export function validateAndParseExpenseRow(
     }
   }
 
-  // Build expense data
-  // Note: createdAt is not included - backend will use current time automatically
   const expenseData: ImportExpenseData = {
     accountId: account.id,
     amount,
@@ -133,6 +140,7 @@ export function validateAndParseExpenseRow(
     tagIds,
     currencyCode: currencyCode || account.currencyCode,
     createdBy,
+    ...(parsedDate ? { createdAt: parsedDate, entryDate: parsedDate } : {}),
   };
 
   return { success: true, errors: [], expenseData };
@@ -157,7 +165,7 @@ export async function processImportFile(
     throw new Error("Expenses sheet not found in the file");
   }
 
-  const expensesData = XLSX.utils.sheet_to_json(expensesSheet) as any[];
+  const expensesData = XLSX.utils.sheet_to_json(expensesSheet, { cellDates: true }) as any[];
 
   if (expensesData.length === 0) {
     throw new Error("No expenses found in the file");

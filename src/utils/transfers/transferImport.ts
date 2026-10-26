@@ -5,6 +5,7 @@ import {
   groupAccountsByName,
   matchAccountInCurrency,
 } from "../accounts/matchAccountForImport";
+import { parseImportDate } from "../importExportDate";
 
 export interface ImportTransferData {
   fromAccountId: number;
@@ -15,6 +16,8 @@ export interface ImportTransferData {
   tagIds: number[];
   currencyCode?: string;
   createdBy?: number;
+  createdAt?: string;
+  entryDate?: string;
 }
 
 export interface ImportValidationResult {
@@ -68,6 +71,12 @@ export function validateAndParseTransferRow(
       return { success: false, errors };
     }
     seenTransferIds.add(normalizedTransferId);
+  }
+
+  const parsedDate = parseImportDate(row["Date"] ?? row["date"]);
+  if (parsedDate === undefined) {
+    errors.push(`Row ${rowNumber}: Date must be YYYY-MM-DD`);
+    return { success: false, errors };
   }
 
   const currencyCodeRaw = String(row["Currency"] || row["currency"] || row["currencyCode"] || "").trim();
@@ -174,8 +183,6 @@ export function validateAndParseTransferRow(
     }
   }
 
-  // Build transfer data
-  // Note: createdAt is not included - backend will use current time automatically
   const transferData: ImportTransferData = {
     fromAccountId: fromAccount.id,
     toAccountId: toAccount.id,
@@ -185,6 +192,7 @@ export function validateAndParseTransferRow(
     tagIds,
     currencyCode: currencyCode || fromAccount.currencyCode,
     createdBy,
+    ...(parsedDate ? { createdAt: parsedDate, entryDate: parsedDate } : {}),
   };
 
   return { success: true, errors: [], transferData };
@@ -209,7 +217,7 @@ export async function processImportFile(
     throw new Error("Transfers sheet not found in the file");
   }
 
-  const transfersData = XLSX.utils.sheet_to_json(transfersSheet) as any[];
+  const transfersData = XLSX.utils.sheet_to_json(transfersSheet, { cellDates: true }) as any[];
 
   if (transfersData.length === 0) {
     throw new Error("No transfers found in the file");
