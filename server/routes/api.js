@@ -13,6 +13,8 @@ import {
 } from "../controllers/referenceRatesController.js";
 import {
   listCustomers,
+  exportCustomers,
+  importCustomers,
   listCustomerOptionsHandler,
   getPinnedCustomerIds,
   pinCustomer,
@@ -357,6 +359,8 @@ protectedRouter.put("/reference-rates", section("referenceRates"), updateReferen
 protectedRouter.post("/reference-rates/send-telegram", section("referenceRates"), sendReferenceRatesToTelegram);
 
 protectedRouter.get("/customers", section("customers"), listCustomers);
+protectedRouter.get("/customers/export", section("customers"), action("exportCustomer"), exportCustomers);
+protectedRouter.post("/customers/import", section("customers"), action("importCustomer"), importCustomers);
 protectedRouter.get(
   "/customers/options",
   anySection("orders", "customers", "dashboard"),

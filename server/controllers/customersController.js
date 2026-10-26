@@ -3,6 +3,7 @@ import { normalizeKycCustomerType, resetCustomerKycForTypeChange } from "./custo
 import { scheduleCacheSync } from "../services/cacheSyncBroadcast.js";
 import {
   listCustomersPaginated,
+  listCustomersForExport,
   listCustomerOptions,
   listPinnedCustomerIds,
   MAX_CUSTOMER_PINS,
@@ -71,6 +72,102 @@ export const listCustomers = (req, res, next) => {
       limit: usePaging ? limit : 20,
     });
     return res.json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
+function customerListFiltersFromQuery(query) {
+  const search = typeof query.search === "string" ? query.search.trim() : "";
+  const customerTypeRaw = query.customerType;
+  const customerType =
+    customerTypeRaw === "individual" || customerTypeRaw === "corporate" ? customerTypeRaw : undefined;
+  const kycStatusRaw = query.kycStatus;
+  const kycStatus =
+    kycStatusRaw === "none" ||
+    kycStatusRaw === "submitted" ||
+    kycStatusRaw === "approved" ||
+    kycStatusRaw === "rejected"
+      ? kycStatusRaw
+      : undefined;
+  return { search, customerType, kycStatus };
+}
+
+export const exportCustomers = (req, res, next) => {
+  try {
+    const result = listCustomersForExport(customerListFiltersFromQuery(req.query));
+    return res.json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
+function parseImportCustomerType(raw) {
+  const value = String(raw ?? "").trim().toLowerCase();
+  if (!value || value === "individual" || value === "个人") return "individual";
+  if (value === "corporate" || value === "company" || value === "企业") return "corporate";
+  return null;
+}
+
+export const importCustomers = (req, res, next) => {
+  try {
+    const rows = req.body?.customers;
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return res.status(400).json({ message: "No customers to import" });
+    }
+
+    const existingNames = new Set(
+      db.prepare("SELECT lower(name) AS name FROM customers;").all().map((row) => row.name),
+    );
+    const seenNames = new Set();
+    const errors = [];
+    const toInsert = [];
+
+    rows.forEach((row, index) => {
+      const rowNumber = Number.isInteger(row?.rowNumber) ? row.rowNumber : index + 2;
+      const name = typeof row?.name === "string" ? row.name.trim() : "";
+      if (!name) {
+        errors.push(`Row ${rowNumber}: Customer name is required`);
+        return;
+      }
+      const nameKey = name.toLowerCase();
+      if (existingNames.has(nameKey)) {
+        errors.push(`Row ${rowNumber}: Customer "${name}" already exists`);
+        return;
+      }
+      if (seenNames.has(nameKey)) {
+        errors.push(`Row ${rowNumber}: Customer "${name}" is duplicated in the file`);
+        return;
+      }
+      const customerType = parseImportCustomerType(row?.customerType);
+      if (!customerType) {
+        errors.push(`Row ${rowNumber}: Type must be Individual or Corporate`);
+        return;
+      }
+      seenNames.add(nameKey);
+      toInsert.push({
+        name,
+        email: typeof row.email === "string" ? row.email.trim() : "",
+        phone: typeof row.phone === "string" ? row.phone.trim() : "",
+        remarks: typeof row.remarks === "string" ? row.remarks.trim() : "",
+        customerType,
+      });
+    });
+
+    const insert = db.prepare(
+      `INSERT INTO customers (name, email, phone, remarks, customerType)
+       VALUES (@name, @email, @phone, @remarks, @customerType);`,
+    );
+    const insertMany = db.transaction((items) => {
+      items.forEach((item) => insert.run(item));
+    });
+    insertMany(toInsert);
+
+    if (toInsert.length > 0) {
+      scheduleCacheSync({ scopes: ["customers", "customerKyc"] });
+    }
+
+    res.json({ created: toInsert.length, errors });
   } catch (error) {
     next(error);
   }

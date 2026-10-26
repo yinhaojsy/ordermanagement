@@ -245,6 +245,29 @@ export const api = createApi({
         { type: "Customer", id: "PINS" },
       ],
     }),
+    importCustomers: builder.mutation<
+      { created: number; errors: string[] },
+      {
+        customers: Array<{
+          rowNumber: number;
+          name: string;
+          email?: string;
+          phone?: string;
+          remarks?: string;
+          customerType?: string;
+        }>;
+      }
+    >({
+      query: (body) => ({
+        url: "customers/import",
+        method: "POST",
+        body,
+      }),
+      invalidatesTags: [
+        { type: "Customer", id: "LIST" },
+        { type: "Customer", id: "OPTIONS" },
+      ],
+    }),
     addCustomer: builder.mutation<
       Customer,
       Omit<Customer, "id"> & { id?: number }
@@ -2770,6 +2793,7 @@ export const {
   usePinCustomerMutation,
   useUnpinCustomerMutation,
   useReorderPinnedCustomersMutation,
+  useImportCustomersMutation,
   useAddCustomerMutation,
   useGetCustomerBeneficiariesQuery,
   useAddCustomerBeneficiaryMutation,

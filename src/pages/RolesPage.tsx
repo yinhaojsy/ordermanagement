@@ -39,6 +39,8 @@ const ACTION_GROUPS = [
     section: "customers",
     actions: [
       { key: "createCustomer", labelKey: "roles.createCustomer" },
+      { key: "importCustomer", labelKey: "roles.importCustomer" },
+      { key: "exportCustomer", labelKey: "roles.exportCustomer" },
       { key: "formatCustomerColors", labelKey: "roles.formatCustomerColors" },
       { key: "updateCustomer", labelKey: "roles.updateCustomer" },
       { key: "pinCustomers", labelKey: "roles.pinCustomers" },

@@ -1238,6 +1238,8 @@ const seedData = () => {
           sections: SECTIONS,
           actions: {
             createCustomer: true,
+            importCustomer: true,
+            exportCustomer: true,
             formatCustomerColors: true,
             updateCustomer: true,
             pinCustomers: true,
@@ -2002,6 +2004,40 @@ const migrateDatabase = () => {
         db.prepare("ALTER TABLE tron_wallets ADD COLUMN usdtBlacklistCheckedAt TEXT").run();
       }
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('tron_wallets_usdt_blacklist_v1')").run();
+    }
+
+    const customerImportExportMigration = db
+      .prepare("SELECT 1 FROM _schema_migrations WHERE key = ?")
+      .get("customer_import_export_permissions_v1");
+    if (!customerImportExportMigration) {
+      const rolesForImportExport = db.prepare("SELECT id, name, permissions FROM roles").all();
+      rolesForImportExport.forEach((role) => {
+        try {
+          const permissions = JSON.parse(role.permissions);
+          if (!permissions.actions) permissions.actions = {};
+          if (role.name === "admin") {
+            let updated = false;
+            if (permissions.actions.importCustomer !== true) {
+              permissions.actions.importCustomer = true;
+              updated = true;
+            }
+            if (permissions.actions.exportCustomer !== true) {
+              permissions.actions.exportCustomer = true;
+              updated = true;
+            }
+            if (updated) {
+              db.prepare("UPDATE roles SET permissions = @permissions, updatedAt = @updatedAt WHERE id = @id").run({
+                id: role.id,
+                permissions: JSON.stringify(permissions),
+                updatedAt: new Date().toISOString(),
+              });
+            }
+          }
+        } catch (error) {
+          console.error(`Error migrating customer import/export permissions for role ${role.id}:`, error);
+        }
+      });
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('customer_import_export_permissions_v1')").run();
     }
   } catch (error) {
     console.error("Migration error:", error);

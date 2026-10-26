@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo, type FormEvent } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, type ChangeEvent, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import SectionCard from "../components/common/SectionCard";
@@ -6,10 +6,12 @@ import { CustomerDepositPoolsSection } from "../components/customerDeposits/Cust
 import { Pagination } from "../components/common/Pagination";
 import AlertModal from "../components/common/AlertModal";
 import ConfirmModal from "../components/common/ConfirmModal";
+import { ImportModal } from "../components/common/ImportModal";
 import { ColorInput } from "../components/common/CurrencyDisplayColorFields";
 import type { Customer, CustomerBeneficiary, CustomerType } from "../types";
 import {
   useAddCustomerMutation,
+  useImportCustomersMutation,
   useGetCustomersQuery,
   useGetCustomerPinsQuery,
   usePinCustomerMutation,
@@ -37,6 +39,8 @@ import {
 import { applyVisiblePinReorder } from "../utils/pinReorder";
 import { CustomersFilters } from "../components/customers/CustomersFilters";
 import { useCustomersFilters } from "../hooks/customers/useCustomersFilters";
+import { exportCustomersToExcel } from "../utils/customers/customerExport";
+import { downloadCustomerImportTemplate, parseCustomerImportFile } from "../utils/customers/customerImport";
 
 const PAGE_SIZE = 20;
 
@@ -51,6 +55,8 @@ export default function CustomersPage() {
   const navigate = useNavigate();
   const authUser = useAppSelector((s) => s.auth.user);
   const canCreateCustomer = hasActionPermission(authUser, "createCustomer");
+  const canImportCustomers = hasActionPermission(authUser, "importCustomer");
+  const canExportCustomers = hasActionPermission(authUser, "exportCustomer");
   const canFormatColors =
     hasActionPermission(authUser, "formatCustomerColors") ||
     hasActionPermission(authUser, "updateCustomer");
@@ -68,6 +74,9 @@ export default function CustomersPage() {
     loadCustomerListSort(),
   );
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const sortMenuRef = useRef<HTMLDivElement | null>(null);
   const [dragOverPinnedId, setDragOverPinnedId] = useState<number | null>(null);
 
@@ -141,6 +150,7 @@ export default function CustomersPage() {
   }, []);
 
   const [addCustomer, { isLoading: isSaving }] = useAddCustomerMutation();
+  const [importCustomers] = useImportCustomersMutation();
   const [addCustomerBeneficiary, { isLoading: isSavingBeneficiary }] =
     useAddCustomerBeneficiaryMutation();
   const [updateCustomerBeneficiary, { isLoading: isUpdatingBeneficiary }] =
@@ -617,6 +627,74 @@ export default function CustomersPage() {
     }
   };
 
+  const handleExportCustomers = async () => {
+    try {
+      setIsExporting(true);
+      const result = await exportCustomersToExcel({
+        search: debouncedSearch || undefined,
+        customerType: queryParams.customerType,
+        kycStatus: queryParams.kycStatus,
+      });
+      setAlertModal({
+        isOpen: true,
+        message: t("customers.exportSuccess", {
+          count: result.count,
+          fileName: result.fileName,
+        }),
+        type: "success",
+      });
+    } catch {
+      setAlertModal({
+        isOpen: true,
+        message: t("customers.exportError"),
+        type: "error",
+      });
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const handleImportFile = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      setIsImporting(true);
+      const parsed = await parseCustomerImportFile(file);
+      let created = 0;
+      const errors = [...parsed.errors];
+      if (parsed.customers.length > 0) {
+        const result = await importCustomers({ customers: parsed.customers }).unwrap();
+        created = result.created;
+        errors.push(...result.errors);
+      }
+      let message = t("customers.importSuccess", { count: created });
+      if (errors.length > 0) {
+        message += `. ${errors.length} ${t("customers.customersFailedToImport")}.`;
+        message += `\n\n${t("customers.importErrors")}:\n${errors.slice(0, 10).join("\n")}`;
+        if (errors.length > 10) {
+          message += `\n${t("customers.andMoreErrors", { count: errors.length - 10 })}`;
+        }
+      }
+      setAlertModal({
+        isOpen: true,
+        message,
+        type: errors.length > 0 ? "warning" : "success",
+      });
+      setIsImportModalOpen(false);
+      e.target.value = "";
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : t("customers.importError");
+      const message = errorMessage.includes("Customers sheet not found")
+        ? t("customers.customersSheetNotFound")
+        : errorMessage.includes("No customers found")
+          ? t("customers.noCustomersInFile")
+          : t("customers.importError");
+      setAlertModal({ isOpen: true, message, type: "error" });
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <CustomerDepositPoolsSection variant="compact" />
@@ -665,6 +743,43 @@ export default function CustomersPage() {
             />
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            {canImportCustomers && (
+              <button
+                type="button"
+                onClick={() => setIsImportModalOpen(true)}
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors flex items-center gap-2"
+              >
+                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                </svg>
+                {t("customers.import")}
+              </button>
+            )}
+            {canExportCustomers && (
+            <button
+              type="button"
+              onClick={handleExportCustomers}
+              disabled={isExporting}
+              className="rounded-lg bg-green-600 px-3 py-2 text-sm font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50 transition-colors flex items-center gap-2"
+            >
+              {isExporting ? (
+                <>
+                  <svg className="h-4 w-4 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  {t("customers.exporting")}
+                </>
+              ) : (
+                <>
+                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                  {t("customers.export")}
+                </>
+              )}
+            </button>
+            )}
             <div className="relative" ref={sortMenuRef}>
               <button
                 type="button"
@@ -1764,6 +1879,20 @@ export default function CustomersPage() {
           </div>
         </div>
       )}
+
+      <ImportModal
+        isOpen={isImportModalOpen}
+        isImporting={isImporting}
+        onClose={() => setIsImportModalOpen(false)}
+        onFileChange={handleImportFile}
+        onDownloadTemplate={downloadCustomerImportTemplate}
+        title={t("customers.importCustomers")}
+        description={t("customers.importDescription")}
+        templateButtonText={t("customers.downloadTemplate")}
+        importingText={t("customers.importing")}
+        cancelText={t("common.cancel")}
+        closeAriaLabel={t("common.close")}
+      />
 
       <AlertModal
         isOpen={alertModal.isOpen}

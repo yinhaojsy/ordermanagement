@@ -158,6 +158,53 @@ export function listCustomersPaginated({
   return { customers, total, page, limit, targetCurrency };
 }
 
+/**
+ * Every customer matching the list filters, with the same balance, P/L, and KYC fields as the list.
+ * @param {{ search?: string, customerType?: string, kycStatus?: string }}
+ */
+export function listCustomersForExport({ search = "", customerType, kycStatus } = {}) {
+  const { whereSql, params } = buildCustomerListWhere({ search, customerType, kycStatus });
+  const rows = db
+    .prepare(
+      `SELECT c.id, c.name, c.email, c.phone, c.remarks,
+              COALESCE(c.customerType, 'individual') AS customerType
+       FROM customers c ${whereSql}
+       ORDER BY lower(c.name) ASC;`,
+    )
+    .all(params);
+
+  const fundingById = Object.fromEntries(
+    getAllCustomersFundingBalances().result.map((r) => [r.customerId, r.totalBalance]),
+  );
+  const profitById = Object.fromEntries(
+    getAllCustomersTradeProfitLoss().result.map((r) => [r.customerId, r.profitLoss]),
+  );
+  const kycById = Object.fromEntries(
+    db.prepare("SELECT customerId, status FROM customer_kyc_profiles;").all().map((r) => [r.customerId, r.status]),
+  );
+
+  const { targetCurrency } = getDefaultProfitConversion();
+
+  const customers = rows.map((c) => {
+    const rawKyc = kycById[c.id];
+    const kycStatusValue =
+      rawKyc === "submitted" || rawKyc === "approved" || rawKyc === "rejected" ? rawKyc : null;
+    return {
+      id: c.id,
+      name: c.name,
+      email: c.email,
+      phone: c.phone,
+      remarks: c.remarks,
+      customerType: c.customerType,
+      kycStatus: kycStatusValue,
+      listBalance: fundingById[c.id] ?? null,
+      listProfitLoss: profitById[c.id] ?? null,
+    };
+  });
+
+  return { customers, targetCurrency };
+}
+
 /** Lightweight id/name list for dropdowns (orders, dashboard, ledger picker). */
 export function listCustomerOptions() {
   return db
