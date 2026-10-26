@@ -1,5 +1,10 @@
 import * as XLSX from "xlsx";
 import type { Expense, Account, Tag, User } from "../../types";
+import {
+  accountNamePreview,
+  groupAccountsByName,
+  matchAccountInCurrency,
+} from "../accounts/matchAccountForImport";
 
 export interface ImportExpenseData {
   accountId: number;
@@ -22,8 +27,7 @@ export interface ImportValidationResult {
 export function validateAndParseExpenseRow(
   row: any,
   rowNumber: number,
-  accountNameToAccount: Map<string, Account>,
-  accountNameMap: Map<string, string>,
+  accountsByName: Map<string, Account[]>,
   tagNameToId: Map<string, number>,
   userNameToId: Map<string, number>,
   existingExpenseIds: Set<string>,
@@ -46,68 +50,38 @@ export function validateAndParseExpenseRow(
     seenExpenseIds.add(normalizedExpenseId);
   }
 
-  // Parse account (required)
+  const currencyCodeRaw = String(row["Currency"] || row["currency"] || row["currencyCode"] || "").trim();
+  const currencyCode = currencyCodeRaw && currencyCodeRaw !== "-" ? currencyCodeRaw : undefined;
+
+  // Parse account inside the row's currency pool. The same name can exist in more than one currency.
   const accountNameRaw = String(row["Account"] || row["account"] || "").trim();
   if (!accountNameRaw) {
     errors.push(`Row ${rowNumber}: Account is required`);
     return { success: false, errors };
   }
-  
-  // Try multiple normalization strategies to find the account
-  let account: Account | undefined = undefined;
-  
-  // Strategy 1: Normalize with Unicode NFC, lowercase, and normalize whitespace
-  const normalized1 = accountNameRaw.toLowerCase().replace(/\s+/g, ' ').normalize('NFC');
-  account = accountNameToAccount.get(normalized1);
-  
-  // Strategy 2: Without Unicode normalization (in case of encoding differences)
-  if (!account) {
-    const normalized2 = accountNameRaw.toLowerCase().replace(/\s+/g, ' ');
-    account = accountNameToAccount.get(normalized2);
-  }
-  
-  // Strategy 3: Remove all whitespace (in case of invisible characters)
-  if (!account) {
-    const normalized3 = accountNameRaw.toLowerCase().replace(/\s/g, '').normalize('NFC');
-    for (const [key, acc] of accountNameToAccount.entries()) {
-      if (key.replace(/\s/g, '') === normalized3) {
-        account = acc;
-        break;
-      }
+
+  const matched = matchAccountInCurrency(accountsByName, accountNameRaw, currencyCode);
+  if (!("account" in matched)) {
+    if (matched.error === "not_found") {
+      const available = accountNamePreview(accountsByName);
+      errors.push(`Row ${rowNumber}: Account "${accountNameRaw}" not found. Available accounts: ${available}`);
+    } else if (matched.error === "not_in_currency") {
+      errors.push(
+        `Row ${rowNumber}: Account "${accountNameRaw}" was not found in currency "${currencyCode}". It exists in ${matched.currencies.join(", ")}`
+      );
+    } else {
+      errors.push(
+        `Row ${rowNumber}: Account "${accountNameRaw}" exists in more than one currency (${matched.currencies.join(", ")}). Set the Currency column.`
+      );
     }
-  }
-  
-  // Strategy 4: Try exact case-insensitive match (fallback)
-  if (!account) {
-    const normalized4 = accountNameRaw.toLowerCase();
-    for (const [key, acc] of accountNameToAccount.entries()) {
-      if (key === normalized4 || acc.name.toLowerCase() === normalized4) {
-        account = acc;
-        break;
-      }
-    }
-  }
-  
-  if (!account) {
-    // Provide helpful error message with available accounts (show original names, not normalized)
-    const availableAccountNames = Array.from(accountNameMap.values()).slice(0, 10);
-    const availableAccountsStr = availableAccountNames.join(', ');
-    errors.push(`Row ${rowNumber}: Account "${accountNameRaw}" not found. Available accounts: ${availableAccountsStr}${accountNameMap.size > 10 ? '...' : ''}`);
     return { success: false, errors };
   }
+  const account = matched.account;
 
   // Parse amount (required)
   const amount = parseFloat(row["Amount"] || row["amount"] || "0");
   if (!amount || amount <= 0) {
     errors.push(`Row ${rowNumber}: Amount must be a positive number`);
-    return { success: false, errors };
-  }
-
-  // Parse currency (optional, but validate if provided)
-  const currencyCodeRaw = String(row["Currency"] || row["currency"] || row["currencyCode"] || "").trim();
-  const currencyCode = currencyCodeRaw && currencyCodeRaw !== "-" ? currencyCodeRaw : undefined;
-  if (currencyCode && currencyCode !== account.currencyCode) {
-    errors.push(`Row ${rowNumber}: Currency "${currencyCode}" does not match account currency "${account.currencyCode}"`);
     return { success: false, errors };
   }
 
@@ -124,17 +98,19 @@ export function validateAndParseExpenseRow(
     createdBy = userId;
   }
 
-  // Parse description (optional)
-  const description = String(row["Description"] || row["description"] || "").trim() || undefined;
+  // Parse description (optional). "-" is the old empty-cell placeholder.
+  const descriptionRaw = String(row["Description"] || row["description"] || "").trim();
+  const description = descriptionRaw && descriptionRaw !== "-" ? descriptionRaw : undefined;
 
   // Parse tags (optional) and validate existence
   const rawTags = row["Tags"] ?? row["tags"];
   const tagIds: number[] = [];
-  if (rawTags !== undefined && rawTags !== null && String(rawTags).trim() !== "") {
-    const tagNames = String(rawTags)
+  const rawTagsText = rawTags === undefined || rawTags === null ? "" : String(rawTags).trim();
+  if (rawTagsText && rawTagsText !== "-") {
+    const tagNames = rawTagsText
       .split(",")
       .map((t) => t.trim())
-      .filter(Boolean);
+      .filter((t) => t && t !== "-");
 
     for (const tagName of tagNames) {
       const tagId = tagNameToId.get(tagName.toLowerCase());
@@ -187,15 +163,7 @@ export async function processImportFile(
     throw new Error("No expenses found in the file");
   }
 
-  // Build maps for validation
-  // Normalize account names: trim, lowercase, and normalize whitespace
-  const normalizeAccountName = (name: string) => 
-    name.trim().toLowerCase().replace(/\s+/g, ' ').normalize('NFC');
-  const accountNameToAccount = new Map(
-    accounts.map((a) => [normalizeAccountName(a.name), a])
-  );
-  // Also create a map with original names for better error messages
-  const accountNameMap = new Map(accounts.map((a) => [normalizeAccountName(a.name), a.name]));
+  const accountsByName = groupAccountsByName(accounts);
   const tagNameToId = new Map(tags.map((t) => [t.name.toLowerCase(), t.id]));
   const userNameToId = new Map(users.map((u) => [u.name.toLowerCase(), u.id]));
 
@@ -219,8 +187,7 @@ export async function processImportFile(
     const result = validateAndParseExpenseRow(
       row,
       rowNumber,
-      accountNameToAccount,
-      accountNameMap,
+      accountsByName,
       tagNameToId,
       userNameToId,
       existingExpenseIds,

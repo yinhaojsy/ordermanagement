@@ -1,5 +1,10 @@
 import * as XLSX from "xlsx";
 import type { Transfer, Account, Tag, User } from "../../types";
+import {
+  accountNamePreview,
+  groupAccountsByName,
+  matchAccountInCurrency,
+} from "../accounts/matchAccountForImport";
 
 export interface ImportTransferData {
   fromAccountId: number;
@@ -21,11 +26,28 @@ export interface ImportValidationResult {
 /**
  * Validates and parses a single transfer row from Excel import
  */
+function describeAccountMatch(
+  rowNumber: number,
+  label: string,
+  accountName: string,
+  currencyCode: string | undefined,
+  accountsByName: Map<string, Account[]>,
+  matched: ReturnType<typeof matchAccountInCurrency>
+): string | null {
+  if ("account" in matched) return null;
+  if (matched.error === "not_found") {
+    return `Row ${rowNumber}: ${label} "${accountName}" not found. Available accounts: ${accountNamePreview(accountsByName)}`;
+  }
+  if (matched.error === "not_in_currency") {
+    return `Row ${rowNumber}: ${label} "${accountName}" was not found in currency "${currencyCode}". It exists in ${matched.currencies.join(", ")}`;
+  }
+  return `Row ${rowNumber}: ${label} "${accountName}" exists in more than one currency (${matched.currencies.join(", ")}). Set the Currency column.`;
+}
+
 export function validateAndParseTransferRow(
   row: any,
   rowNumber: number,
-  accountNameToAccount: Map<string, Account>,
-  accountNameMap: Map<string, string>,
+  accountsByName: Map<string, Account[]>,
   tagNameToId: Map<string, number>,
   userNameToId: Map<string, number>,
   existingTransferIds: Set<string>,
@@ -48,77 +70,36 @@ export function validateAndParseTransferRow(
     seenTransferIds.add(normalizedTransferId);
   }
 
-  // Parse from account (required)
+  const currencyCodeRaw = String(row["Currency"] || row["currency"] || row["currencyCode"] || "").trim();
+  const currencyCode = currencyCodeRaw && currencyCodeRaw !== "-" ? currencyCodeRaw : undefined;
+
+  // Parse from account inside the row's currency pool.
   const fromAccountNameRaw = String(row["From Account"] || row["fromAccount"] || "").trim();
   if (!fromAccountNameRaw) {
     errors.push(`Row ${rowNumber}: From Account is required`);
     return { success: false, errors };
   }
-  
-  // Try multiple normalization strategies to find the account
-  let fromAccount: Account | undefined = undefined;
-  const normalizedFromName = fromAccountNameRaw.toLowerCase().replace(/\s+/g, ' ').normalize('NFC');
-  fromAccount = accountNameToAccount.get(normalizedFromName);
-  
-  // If not found, try without Unicode normalization
-  if (!fromAccount) {
-    const normalizedWithoutNFC = fromAccountNameRaw.toLowerCase().replace(/\s+/g, ' ');
-    fromAccount = accountNameToAccount.get(normalizedWithoutNFC);
-  }
-  
-  // If still not found, try removing all whitespace
-  if (!fromAccount) {
-    const normalizedNoSpaces = fromAccountNameRaw.toLowerCase().replace(/\s/g, '').normalize('NFC');
-    for (const [key, acc] of accountNameToAccount.entries()) {
-      if (key.replace(/\s/g, '') === normalizedNoSpaces) {
-        fromAccount = acc;
-        break;
-      }
-    }
-  }
-  
-  if (!fromAccount) {
-    const availableAccountNames = Array.from(accountNameMap.values()).slice(0, 10);
-    const availableAccountsStr = availableAccountNames.join(', ');
-    errors.push(`Row ${rowNumber}: From Account "${fromAccountNameRaw}" not found. Available accounts: ${availableAccountsStr}${accountNameMap.size > 10 ? '...' : ''}`);
+  const fromMatched = matchAccountInCurrency(accountsByName, fromAccountNameRaw, currencyCode);
+  const fromError = describeAccountMatch(rowNumber, "From Account", fromAccountNameRaw, currencyCode, accountsByName, fromMatched);
+  if (fromError || !("account" in fromMatched)) {
+    errors.push(fromError || `Row ${rowNumber}: From Account "${fromAccountNameRaw}" not found`);
     return { success: false, errors };
   }
+  const fromAccount = fromMatched.account;
 
-  // Parse to account (required)
+  // Parse to account inside the same currency pool.
   const toAccountNameRaw = String(row["To Account"] || row["toAccount"] || "").trim();
   if (!toAccountNameRaw) {
     errors.push(`Row ${rowNumber}: To Account is required`);
     return { success: false, errors };
   }
-  
-  // Try multiple normalization strategies to find the account
-  let toAccount: Account | undefined = undefined;
-  const normalizedToName = toAccountNameRaw.toLowerCase().replace(/\s+/g, ' ').normalize('NFC');
-  toAccount = accountNameToAccount.get(normalizedToName);
-  
-  // If not found, try without Unicode normalization
-  if (!toAccount) {
-    const normalizedWithoutNFC = toAccountNameRaw.toLowerCase().replace(/\s+/g, ' ');
-    toAccount = accountNameToAccount.get(normalizedWithoutNFC);
-  }
-  
-  // If still not found, try removing all whitespace
-  if (!toAccount) {
-    const normalizedNoSpaces = toAccountNameRaw.toLowerCase().replace(/\s/g, '').normalize('NFC');
-    for (const [key, acc] of accountNameToAccount.entries()) {
-      if (key.replace(/\s/g, '') === normalizedNoSpaces) {
-        toAccount = acc;
-        break;
-      }
-    }
-  }
-  
-  if (!toAccount) {
-    const availableAccountNames = Array.from(accountNameMap.values()).slice(0, 10);
-    const availableAccountsStr = availableAccountNames.join(', ');
-    errors.push(`Row ${rowNumber}: To Account "${toAccountNameRaw}" not found. Available accounts: ${availableAccountsStr}${accountNameMap.size > 10 ? '...' : ''}`);
+  const toMatched = matchAccountInCurrency(accountsByName, toAccountNameRaw, currencyCode);
+  const toError = describeAccountMatch(rowNumber, "To Account", toAccountNameRaw, currencyCode, accountsByName, toMatched);
+  if (toError || !("account" in toMatched)) {
+    errors.push(toError || `Row ${rowNumber}: To Account "${toAccountNameRaw}" not found`);
     return { success: false, errors };
   }
+  const toAccount = toMatched.account;
 
   // Validate that from and to accounts are different
   if (fromAccount.id === toAccount.id) {
@@ -127,20 +108,9 @@ export function validateAndParseTransferRow(
   }
 
   // Validate that both accounts have the same currency
-  if (fromAccount.currencyCode !== toAccount.currencyCode) {
+  if (fromAccount.currencyCode.toUpperCase() !== toAccount.currencyCode.toUpperCase()) {
     errors.push(`Row ${rowNumber}: From Account and To Account must have the same currency`);
     return { success: false, errors };
-  }
-
-  // Parse currency (optional, but validate if provided)
-  const currencyCodeRaw = String(row["Currency"] || row["currency"] || row["currencyCode"] || "").trim();
-  const currencyCode = currencyCodeRaw && currencyCodeRaw !== "-" ? currencyCodeRaw : undefined;
-  if (currencyCode) {
-    // Validate currency matches both accounts
-    if (currencyCode !== fromAccount.currencyCode || currencyCode !== toAccount.currencyCode) {
-      errors.push(`Row ${rowNumber}: Currency "${currencyCode}" does not match account currencies "${fromAccount.currencyCode}"`);
-      return { success: false, errors };
-    }
   }
 
   // Parse amount (required)
@@ -163,8 +133,9 @@ export function validateAndParseTransferRow(
     createdBy = userId;
   }
 
-  // Parse description (required)
-  const description = String(row["Description"] || row["description"] || "").trim();
+  // Parse description (required). "-" is the old empty-cell placeholder.
+  const descriptionRaw = String(row["Description"] || row["description"] || "").trim();
+  const description = descriptionRaw === "-" ? "" : descriptionRaw;
   if (!description) {
     errors.push(`Row ${rowNumber}: Description is required`);
     return { success: false, errors };
@@ -181,14 +152,15 @@ export function validateAndParseTransferRow(
     return { success: false, errors };
   }
 
-  // Parse tags (optional) and validate existence
+  // Parse tags (optional) and validate existence. "-" is the old empty-cell placeholder.
   const rawTags = row["Tags"] ?? row["tags"];
   const tagIds: number[] = [];
-  if (rawTags !== undefined && rawTags !== null && String(rawTags).trim() !== "") {
-    const tagNames = String(rawTags)
+  const rawTagsText = rawTags === undefined || rawTags === null ? "" : String(rawTags).trim();
+  if (rawTagsText && rawTagsText !== "-") {
+    const tagNames = rawTagsText
       .split(",")
       .map((t) => t.trim())
-      .filter(Boolean);
+      .filter((t) => t && t !== "-");
 
     for (const tagName of tagNames) {
       const tagId = tagNameToId.get(tagName.toLowerCase());
@@ -243,15 +215,7 @@ export async function processImportFile(
     throw new Error("No transfers found in the file");
   }
 
-  // Build maps for validation
-  // Normalize account names: trim, lowercase, and normalize whitespace
-  const normalizeAccountName = (name: string) => 
-    name.trim().toLowerCase().replace(/\s+/g, ' ').normalize('NFC');
-  const accountNameToAccount = new Map(
-    accounts.map((a) => [normalizeAccountName(a.name), a])
-  );
-  // Also create a map with original names for better error messages
-  const accountNameMap = new Map(accounts.map((a) => [normalizeAccountName(a.name), a.name]));
+  const accountsByName = groupAccountsByName(accounts);
   const tagNameToId = new Map(tags.map((t) => [t.name.toLowerCase(), t.id]));
   const userNameToId = new Map(users.map((u) => [u.name.toLowerCase(), u.id]));
 
@@ -275,8 +239,7 @@ export async function processImportFile(
     const result = validateAndParseTransferRow(
       row,
       rowNumber,
-      accountNameToAccount,
-      accountNameMap,
+      accountsByName,
       tagNameToId,
       userNameToId,
       existingTransferIds,

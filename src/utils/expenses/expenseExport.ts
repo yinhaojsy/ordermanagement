@@ -41,12 +41,12 @@ export async function exportExpensesToExcel(
     "Expense ID": expense.id,
     "Type": expense.type === 'income' ? 'Income' : 'Expense',
     "Date": expense.createdAt ? new Date(expense.createdAt).toLocaleDateString() : "",
-    "Account": expense.accountName || "-",
+    "Account": expense.accountName || "",
     "Amount": expense.amount,
-    "Currency": expense.currencyCode || "-",
-    "Description": expense.description || "-",
-    "Created By": expense.createdByName || "-",
-    "Tags": expense.tags && expense.tags.length > 0 ? expense.tags.map((tag: any) => tag.name).join(", ") : "-",
+    "Currency": expense.currencyCode || "",
+    "Description": expense.description || "",
+    "Created By": expense.createdByName || "",
+    "Tags": expense.tags && expense.tags.length > 0 ? expense.tags.map((tag: any) => tag.name).join(", ") : "",
   }));
 
   // Create worksheet

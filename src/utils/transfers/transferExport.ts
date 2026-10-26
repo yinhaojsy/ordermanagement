@@ -42,14 +42,14 @@ export async function exportTransfersToExcel(
   const excelData = transfers.map((transfer: any) => ({
     "Transfer ID": transfer.id,
     "Date": transfer.createdAt ? new Date(transfer.createdAt).toLocaleDateString() : "",
-    "From Account": transfer.fromAccountName || "-",
-    "To Account": transfer.toAccountName || "-",
+    "From Account": transfer.fromAccountName || "",
+    "To Account": transfer.toAccountName || "",
     "Amount": transfer.amount,
-    "Currency": transfer.currencyCode || "-",
+    "Currency": transfer.currencyCode || "",
     "Transaction Fee": transfer.transactionFee || 0,
-    "Description": transfer.description || "-",
-    "Created By": transfer.createdByName || "-",
-    "Tags": transfer.tags && transfer.tags.length > 0 ? transfer.tags.map((tag: any) => tag.name).join(", ") : "-",
+    "Description": transfer.description || "",
+    "Created By": transfer.createdByName || "",
+    "Tags": transfer.tags && transfer.tags.length > 0 ? transfer.tags.map((tag: any) => tag.name).join(", ") : "",
   }));
 
   // Create worksheet
