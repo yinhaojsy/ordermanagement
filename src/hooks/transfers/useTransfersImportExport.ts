@@ -54,7 +54,7 @@ export function useTransfersImportExport({
     // Create template data with example rows
     const templateData = [
       {
-        "Transfer ID": "TRF-1001",
+        "Transfer ID": 1001,
         "Date": "2026-10-26",
         "From Account": "Main USD",
         "To Account": "Secondary USD",
@@ -66,7 +66,7 @@ export function useTransfersImportExport({
         "Tags": "Internal, Monthly"
       },
       {
-        "Transfer ID": "TRF-1002",
+        "Transfer ID": 1002,
         "Date": "2026-10-26",
         "From Account": "Main HKD",
         "To Account": "Secondary HKD",

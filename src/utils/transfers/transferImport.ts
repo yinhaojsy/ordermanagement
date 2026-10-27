@@ -6,8 +6,10 @@ import {
   matchAccountInCurrency,
 } from "../accounts/matchAccountForImport";
 import { parseImportDate } from "../importExportDate";
+import { parseImportRecordId } from "../importRecordId";
 
 export interface ImportTransferData {
+  id?: number;
   fromAccountId: number;
   toAccountId: number;
   amount: number;
@@ -58,16 +60,22 @@ export function validateAndParseTransferRow(
 ): ImportValidationResult {
   const errors: string[] = [];
 
-  // Validate Transfer ID uniqueness (optional field)
-  const transferIdRaw = String(row["Transfer ID"] || row["Transfer Id"] || row["transferId"] || "").trim();
-  if (transferIdRaw) {
-    const normalizedTransferId = transferIdRaw.toLowerCase();
+  // Preserve a numeric Transfer ID so the imported row keeps the spreadsheet id.
+  const transferIdCell = row["Transfer ID"] ?? row["Transfer Id"] ?? row["transferId"];
+  const recordId = parseImportRecordId(transferIdCell);
+  if (recordId === undefined) {
+    const label = String(transferIdCell).trim();
+    errors.push(`Row ${rowNumber}: Transfer ID "${label}" must be a positive integer`);
+    return { success: false, errors };
+  }
+  if (recordId !== null) {
+    const normalizedTransferId = String(recordId);
     if (existingTransferIds.has(normalizedTransferId)) {
-      errors.push(`Row ${rowNumber}: Transfer ID "${transferIdRaw}" already exists`);
+      errors.push(`Row ${rowNumber}: Transfer ID "${recordId}" already exists`);
       return { success: false, errors };
     }
     if (seenTransferIds.has(normalizedTransferId)) {
-      errors.push(`Row ${rowNumber}: Transfer ID "${transferIdRaw}" is duplicated in the file`);
+      errors.push(`Row ${rowNumber}: Transfer ID "${recordId}" is duplicated in the file`);
       return { success: false, errors };
     }
     seenTransferIds.add(normalizedTransferId);
@@ -180,6 +188,7 @@ export function validateAndParseTransferRow(
   }
 
   const transferData: ImportTransferData = {
+    ...(recordId !== null ? { id: recordId } : {}),
     fromAccountId: fromAccount.id,
     toAccountId: toAccount.id,
     amount,

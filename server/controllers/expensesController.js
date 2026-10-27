@@ -13,6 +13,7 @@ import {
   requireAccountAccess,
 } from "../utils/accountAccess.js";
 import { scheduleCacheSync } from "../services/cacheSyncBroadcast.js";
+import { parseOptionalRecordId } from "../utils/importRecordId.js";
 
 export const listExpenses = (req, res) => {
   const {
@@ -282,6 +283,11 @@ export const createExpense = async (req, res, next) => {
     const createdBy = req.body?.createdBy;
     const tagIds = req.body?.tagIds ? (Array.isArray(req.body.tagIds) ? req.body.tagIds : JSON.parse(req.body.tagIds)) : undefined;
     const type = (req.body?.type === 'income') ? 'income' : 'expense';
+    const parsedRecordId = parseOptionalRecordId(req.body?.id, "Expense ID");
+    if (parsedRecordId.error) {
+      return res.status(400).json({ message: parsedRecordId.error });
+    }
+    const recordId = parsedRecordId.id;
     const file = req.file; // Multer file object
 
     // Validate accountId - handle both string and number inputs (FormData sends strings)
@@ -363,16 +369,24 @@ export const createExpense = async (req, res, next) => {
       }
     }
 
+    if (recordId != null) {
+      const existingExpense = db.prepare("SELECT 1 AS ok FROM expenses WHERE id = ?").get(recordId);
+      if (existingExpense) {
+        return res.status(409).json({ message: `Expense ID ${recordId} already exists` });
+      }
+    }
+
     // Perform expense creation in a transaction
     let expenseId;
     const transaction = db.transaction(() => {
       // Create expense record first to get the expense ID
       const stmt = db.prepare(
-        `INSERT INTO expenses (accountId, amount, currencyCode, description, imagePath, type, createdBy, createdAt, entryDate)
-         VALUES (@accountId, @amount, @currencyCode, @description, @imagePath, @type, @createdBy, @createdAt, @entryDate);`
+        `INSERT INTO expenses (id, accountId, amount, currencyCode, description, imagePath, type, createdBy, createdAt, entryDate)
+         VALUES (@id, @accountId, @amount, @currencyCode, @description, @imagePath, @type, @createdBy, @createdAt, @entryDate);`
       );
       const entryDateValue = req.body?.entryDate ? new Date(req.body.entryDate).toISOString() : finalCreatedAt;
       const result = stmt.run({
+        id: recordId,
         accountId: accountIdNum,
         amount: expenseAmount,
         currencyCode: finalCurrencyCode,

@@ -1,16 +1,19 @@
 import * as XLSX from "xlsx";
-import type { Expense, Account, Tag, User } from "../../types";
+import type { Expense, ExpenseType, Account, Tag, User } from "../../types";
 import {
   accountNamePreview,
   groupAccountsByName,
   matchAccountInCurrency,
 } from "../accounts/matchAccountForImport";
 import { parseImportDate } from "../importExportDate";
+import { parseImportRecordId } from "../importRecordId";
 
 export interface ImportExpenseData {
+  id?: number;
   accountId: number;
   amount: number;
   description?: string;
+  type: ExpenseType;
   tagIds: number[];
   currencyCode?: string;
   createdBy?: number;
@@ -38,19 +41,38 @@ export function validateAndParseExpenseRow(
 ): ImportValidationResult {
   const errors: string[] = [];
 
-  // Validate Expense ID uniqueness (optional field)
-  const expenseIdRaw = String(row["Expense ID"] || row["Expense Id"] || row["expenseId"] || "").trim();
-  if (expenseIdRaw) {
-    const normalizedExpenseId = expenseIdRaw.toLowerCase();
+  // Preserve a numeric Expense ID so the imported row keeps the spreadsheet id.
+  const expenseIdCell = row["Expense ID"] ?? row["Expense Id"] ?? row["expenseId"];
+  const recordId = parseImportRecordId(expenseIdCell);
+  if (recordId === undefined) {
+    const label = String(expenseIdCell).trim();
+    errors.push(`Row ${rowNumber}: Expense ID "${label}" must be a positive integer`);
+    return { success: false, errors };
+  }
+  if (recordId !== null) {
+    const normalizedExpenseId = String(recordId);
     if (existingExpenseIds.has(normalizedExpenseId)) {
-      errors.push(`Row ${rowNumber}: Expense ID "${expenseIdRaw}" already exists`);
+      errors.push(`Row ${rowNumber}: Expense ID "${recordId}" already exists`);
       return { success: false, errors };
     }
     if (seenExpenseIds.has(normalizedExpenseId)) {
-      errors.push(`Row ${rowNumber}: Expense ID "${expenseIdRaw}" is duplicated in the file`);
+      errors.push(`Row ${rowNumber}: Expense ID "${recordId}" is duplicated in the file`);
       return { success: false, errors };
     }
     seenExpenseIds.add(normalizedExpenseId);
+  }
+
+  const typeRaw = String(row["Type"] ?? row["type"] ?? "").trim().toLowerCase();
+  let type: ExpenseType;
+  if (!typeRaw || typeRaw === "-") {
+    type = "expense";
+  } else if (typeRaw === "income") {
+    type = "income";
+  } else if (typeRaw === "expense") {
+    type = "expense";
+  } else {
+    errors.push(`Row ${rowNumber}: Type must be Income or Expense`);
+    return { success: false, errors };
   }
 
   const parsedDate = parseImportDate(row["Date"] ?? row["date"]);
@@ -134,9 +156,11 @@ export function validateAndParseExpenseRow(
   }
 
   const expenseData: ImportExpenseData = {
+    ...(recordId !== null ? { id: recordId } : {}),
     accountId: account.id,
     amount,
     description,
+    type,
     tagIds,
     currencyCode: currencyCode || account.currencyCode,
     createdBy,

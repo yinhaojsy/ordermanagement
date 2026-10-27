@@ -7,6 +7,7 @@ import {
   requireAccountAccess,
 } from "../utils/accountAccess.js";
 import { scheduleCacheSync } from "../services/cacheSyncBroadcast.js";
+import { parseOptionalRecordId } from "../utils/importRecordId.js";
 
 export const listTransfers = (req, res) => {
   const {
@@ -307,6 +308,11 @@ export const exportTransfers = (req, res) => {
 export const createTransfer = async (req, res, next) => {
   try {
     const { fromAccountId, toAccountId, amount, description, transactionFee, createdBy, tagIds } = req.body || {};
+    const parsedRecordId = parseOptionalRecordId(req.body?.id, "Transfer ID");
+    if (parsedRecordId.error) {
+      return res.status(400).json({ message: parsedRecordId.error });
+    }
+    const recordId = parsedRecordId.id;
     const file = req.file;
 
     if (!fromAccountId || !toAccountId || !amount) {
@@ -395,15 +401,23 @@ export const createTransfer = async (req, res, next) => {
       }
     }
 
+    if (recordId != null) {
+      const existingTransfer = db.prepare("SELECT 1 AS ok FROM internal_transfers WHERE id = ?").get(recordId);
+      if (existingTransfer) {
+        return res.status(409).json({ message: `Transfer ID ${recordId} already exists` });
+      }
+    }
+
     // Perform transfer in a transaction
     const transaction = db.transaction(() => {
       // Create transfer record first to get the transfer ID
       const stmt = db.prepare(
-        `INSERT INTO internal_transfers (fromAccountId, toAccountId, amount, currencyCode, description, transactionFee, createdBy, createdAt, entryDate, imagePath)
-         VALUES (@fromAccountId, @toAccountId, @amount, @currencyCode, @description, @transactionFee, @createdBy, @createdAt, @entryDate, @imagePath);`
+        `INSERT INTO internal_transfers (id, fromAccountId, toAccountId, amount, currencyCode, description, transactionFee, createdBy, createdAt, entryDate, imagePath)
+         VALUES (@id, @fromAccountId, @toAccountId, @amount, @currencyCode, @description, @transactionFee, @createdBy, @createdAt, @entryDate, @imagePath);`
       );
       const entryDateValue = req.body?.entryDate ? new Date(req.body.entryDate).toISOString() : finalCreatedAt;
       const result = stmt.run({
+        id: recordId,
         fromAccountId,
         toAccountId,
         amount: transferAmount,

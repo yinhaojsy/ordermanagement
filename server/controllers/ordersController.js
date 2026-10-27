@@ -16,6 +16,7 @@ import {
   requireAccountAccess,
 } from "../utils/accountAccess.js";
 import { scheduleCacheSync } from "../services/cacheSyncBroadcast.js";
+import { parseOptionalRecordId } from "../utils/importRecordId.js";
 import { convertCurrency } from "../utils/currencyConversion.js";
 import {
   syncCustomerLedgerForCompletedOrder,
@@ -1378,6 +1379,12 @@ export const createOrder = async (req, res, next) => {
   try {
     const payload = req.body || {};
     const { tagIds, buyLegs, sellLegs, profitLegs, serviceChargeLegs, ...orderData } = payload;
+    const parsedRecordId = parseOptionalRecordId(orderData.id, "Order ID");
+    if (parsedRecordId.error) {
+      return res.status(400).json({ message: parsedRecordId.error });
+    }
+    const recordId = parsedRecordId.id;
+    delete orderData.id;
     const importedBuyLegs = Array.isArray(buyLegs) ? buyLegs : [];
     const importedSellLegs = Array.isArray(sellLegs) ? sellLegs : [];
     const importedProfitLegs = Array.isArray(profitLegs) ? profitLegs : [];
@@ -1514,8 +1521,16 @@ export const createOrder = async (req, res, next) => {
       return res.status(400).json({ message: "Sell account currency does not match toCurrency" });
     }
     
+    if (recordId != null) {
+      const existingOrder = db.prepare("SELECT 1 AS ok FROM orders WHERE id = ?").get(recordId);
+      if (existingOrder) {
+        return res.status(409).json({ message: `Order ID ${recordId} already exists` });
+      }
+    }
+
     const stmt = db.prepare(
       `INSERT INTO orders (
+         id,
          customerId,
          fromCurrency,
          toCurrency,
@@ -1538,6 +1553,7 @@ export const createOrder = async (req, res, next) => {
          orderDate,
          orderMode
        ) VALUES (
+         @id,
          @customerId,
          @fromCurrency,
          @toCurrency,
@@ -1567,6 +1583,7 @@ export const createOrder = async (req, res, next) => {
     const nowIso = new Date().toISOString();
     const result = stmt.run({
       ...rowForInsert,
+      id: recordId,
       status: orderData.status || "saved",
       handlerId: orderData.handlerId ?? null,
       buyAccountId: orderData.buyAccountId ?? null,

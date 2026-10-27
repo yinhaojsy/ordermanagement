@@ -60,7 +60,7 @@ export function useOrdersImportExport({
     // Create template data with example rows
     const templateData = [
       {
-        "Order ID": "EXT-1001",
+        "Order ID": 1001,
         "Date": "2026-10-26",
         "Customer": "Example Customer",
         "Handler": "John Doe",
@@ -81,7 +81,7 @@ export function useOrdersImportExport({
         "Tags": "Priority, VIP"
       },
       {
-        "Order ID": "EXT-1002",
+        "Order ID": 1002,
         "Date": "2026-10-26",
         "Customer": "Another Customer",
         "Handler": "Jane Smith",

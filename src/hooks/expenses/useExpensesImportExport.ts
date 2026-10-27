@@ -54,7 +54,8 @@ export function useExpensesImportExport({
     // Create template data with example rows
     const templateData = [
       {
-        "Expense ID": "EXT-1001",
+        "Expense ID": 1001,
+        "Type": "Expense",
         "Date": "2026-10-26",
         "Account": "Main USD",
         "Amount": 100.50,
@@ -64,12 +65,13 @@ export function useExpensesImportExport({
         "Tags": "Office, Monthly"
       },
       {
-        "Expense ID": "EXT-1002",
+        "Expense ID": 1002,
+        "Type": "Income",
         "Date": "2026-10-26",
         "Account": "Main HKD",
         "Amount": 500,
         "Currency": "HKD",
-        "Description": "Travel expenses",
+        "Description": "Client payment",
         "Created By": "Admin User",
         "Tags": "Travel"
       }

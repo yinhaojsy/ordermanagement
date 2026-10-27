@@ -1,6 +1,7 @@
 import * as XLSX from "xlsx";
 import type { OrderStatus, Order, Customer, User, Currency, Account, Tag } from "../../types";
 import { parseImportDate } from "../importExportDate";
+import { parseImportRecordId } from "../importRecordId";
 
 export interface ImportFundingLeg {
   accountId: number | null;
@@ -10,6 +11,7 @@ export interface ImportFundingLeg {
 }
 
 export interface ImportOrderData {
+  id: number;
   customerId: number;
   handlerId: number;
   fromCurrency: string;
@@ -206,19 +208,25 @@ export function validateAndParseOrderRow(
 ): ImportValidationResult {
   const errors: string[] = [];
 
-  // Validate Order ID uniqueness
-  const orderIdRaw = String(row["Order ID"] || row["Order Id"] || row["orderId"] || "").trim();
-  if (!orderIdRaw) {
+  // Preserve a numeric Order ID so the imported row keeps the spreadsheet id.
+  const orderIdCell = row["Order ID"] ?? row["Order Id"] ?? row["orderId"];
+  const recordId = parseImportRecordId(orderIdCell);
+  if (recordId === null) {
     errors.push(`Row ${rowNumber}: Order ID is required`);
     return { success: false, errors };
   }
-  const normalizedOrderId = orderIdRaw.toLowerCase();
+  if (recordId === undefined) {
+    const label = String(orderIdCell).trim();
+    errors.push(`Row ${rowNumber}: Order ID "${label}" must be a positive integer`);
+    return { success: false, errors };
+  }
+  const normalizedOrderId = String(recordId);
   if (existingOrderIds.has(normalizedOrderId)) {
-    errors.push(`Row ${rowNumber}: Order ID "${orderIdRaw}" already exists`);
+    errors.push(`Row ${rowNumber}: Order ID "${recordId}" already exists`);
     return { success: false, errors };
   }
   if (seenOrderIds.has(normalizedOrderId)) {
-    errors.push(`Row ${rowNumber}: Order ID "${orderIdRaw}" is duplicated in the file`);
+    errors.push(`Row ${rowNumber}: Order ID "${recordId}" is duplicated in the file`);
     return { success: false, errors };
   }
 
@@ -371,7 +379,10 @@ export function validateAndParseOrderRow(
   }
 
   // Build order data
+  seenOrderIds.add(normalizedOrderId);
+
   const orderData: ImportOrderData = {
+    id: recordId,
     customerId,
     handlerId,
     fromCurrency,
@@ -481,9 +492,6 @@ export async function processImportFile(
     );
 
     if (result.success && result.orderData) {
-      // Track seen order IDs
-      const orderIdRaw = String(row["Order ID"] || row["Order Id"] || row["orderId"] || "").trim();
-      seenOrderIds.add(orderIdRaw.toLowerCase());
       validatedOrders.push(result.orderData);
     } else {
       errors.push(...result.errors);

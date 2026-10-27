@@ -345,6 +345,8 @@ export interface CustomerBeneficiary {
 }
 
 export interface OrderInput {
+  /** When set, the created order uses this id instead of the next autoincrement value. */
+  id?: number;
   /** When set without customerId, server finds or creates customer by name */
   customerName?: string;
   customerId?: number;
@@ -514,6 +516,8 @@ export interface TransferChange {
 }
 
 export interface TransferInput {
+  /** When set, the created transfer uses this id instead of the next autoincrement value. */
+  id?: number;
   fromAccountId: number;
   toAccountId: number;
   amount: number;
@@ -552,6 +556,8 @@ export interface Expense {
 }
 
 export interface ExpenseInput {
+  /** When set, the created expense uses this id instead of the next autoincrement value. */
+  id?: number;
   accountId: number;
   amount: number;
   description?: string;
