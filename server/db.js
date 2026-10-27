@@ -2039,6 +2039,36 @@ const migrateDatabase = () => {
       });
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('customer_import_export_permissions_v1')").run();
     }
+
+    const importedOrderLedgerDates = db
+      .prepare("SELECT 1 FROM _schema_migrations WHERE key = ?")
+      .get("imported_order_ledger_dates_v1");
+    if (!importedOrderLedgerDates) {
+      const importedTxs = db
+        .prepare(
+          `SELECT id, description, createdAt FROM account_transactions
+           WHERE description LIKE 'Order #%' AND description LIKE '%(Imported)%'`,
+        )
+        .all();
+      const orderDateStmt = db.prepare(
+        "SELECT COALESCE(orderDate, createdAt) AS postedAt FROM orders WHERE id = ?",
+      );
+      const updateTxDate = db.prepare("UPDATE account_transactions SET createdAt = ? WHERE id = ?");
+      const orderIdPattern = /^Order #(\d+)\b/;
+      const realignImportedOrderDates = db.transaction(() => {
+        for (const tx of importedTxs) {
+          const match = orderIdPattern.exec(tx.description || "");
+          if (!match) continue;
+          const order = orderDateStmt.get(Number(match[1]));
+          const parsed = order?.postedAt ? new Date(order.postedAt) : null;
+          if (!parsed || Number.isNaN(parsed.getTime())) continue;
+          const postedAt = parsed.toISOString();
+          if (postedAt !== tx.createdAt) updateTxDate.run(postedAt, tx.id);
+        }
+      });
+      realignImportedOrderDates();
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('imported_order_ledger_dates_v1')").run();
+    }
   } catch (error) {
     console.error("Migration error:", error);
   }

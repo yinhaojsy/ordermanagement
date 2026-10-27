@@ -103,7 +103,7 @@ function assertServiceChargeBalanceOnConfirm(serviceCharge) {
   return null;
 }
 
-function applyCashServiceChargeAccountEffects(serviceCharge, orderId) {
+function applyCashServiceChargeAccountEffects(serviceCharge, orderId, createdAt = new Date().toISOString()) {
   if (isCustomerBalanceFunded(serviceCharge) || !serviceCharge.accountId) return;
 
   const accountForBalance = db
@@ -124,7 +124,7 @@ function applyCashServiceChargeAccountEffects(serviceCharge, orderId) {
       serviceCharge.accountId,
       amount,
       `Order #${orderId} - Service charge`,
-      new Date().toISOString(),
+      createdAt,
     );
   } else if (amount < 0) {
     const absAmount = Math.abs(amount);
@@ -137,7 +137,7 @@ function applyCashServiceChargeAccountEffects(serviceCharge, orderId) {
       serviceCharge.accountId,
       absAmount,
       `Order #${orderId} - Service charge borne by company`,
-      new Date().toISOString(),
+      createdAt,
     );
   }
 }
@@ -1781,7 +1781,7 @@ export const createOrder = async (req, res, next) => {
             orderData.profitAccountId,
             profitAmount,
             `Order #${orderId} - Profit (Imported)`,
-            new Date().toISOString()
+            ledgerTimestampForOrder(orderId, true)
           );
         }
       }
@@ -1801,7 +1801,7 @@ export const createOrder = async (req, res, next) => {
               orderData.serviceChargeAccountId,
               serviceChargeAmount,
               `Order #${orderId} - Service charge (Imported)`,
-              new Date().toISOString()
+              ledgerTimestampForOrder(orderId, true)
             );
           } else {
             // Negative service charge: subtract from account (we pay it)
@@ -1814,7 +1814,7 @@ export const createOrder = async (req, res, next) => {
               orderData.serviceChargeAccountId,
               absAmount,
               `Order #${orderId} - Service charge paid by us (Imported)`,
-              new Date().toISOString()
+              ledgerTimestampForOrder(orderId, true)
             );
           }
         }
@@ -3187,9 +3187,20 @@ export const addBeneficiary = (req, res, next) => {
   }
 };
 
+/** Ledger time for an imported order is the sheet date already stored on the order. */
+function ledgerTimestampForOrder(orderId, useOrderDate) {
+  if (!useOrderDate) return new Date().toISOString();
+  const row = db
+    .prepare("SELECT COALESCE(orderDate, createdAt) AS postedAt FROM orders WHERE id = ?;")
+    .get(orderId);
+  const parsed = row?.postedAt ? new Date(row.postedAt) : null;
+  if (parsed && !Number.isNaN(parsed.getTime())) return parsed.toISOString();
+  return new Date().toISOString();
+}
+
 /** Post each imported leg to its own account. Does not book the full order amount. */
 function applyImportedFundingLegs(orderId, { buyLegs = [], sellLegs = [], profitLegs = [], serviceChargeLegs = [] } = {}) {
-  const now = new Date().toISOString();
+  const now = ledgerTimestampForOrder(orderId, true);
   const insertReceipt = db.prepare(
     `INSERT INTO order_receipts (orderId, imagePath, amount, accountId, status, fundedFrom, createdAt)
      VALUES (?, 'OTC_NO_IMAGE', ?, ?, 'confirmed', ?, ?);`,
@@ -3261,6 +3272,7 @@ function applyImportedFundingLegs(orderId, { buyLegs = [], sellLegs = [], profit
       applyCashServiceChargeAccountEffects(
         { accountId: leg.accountId, amount, fundedFrom: "cash" },
         orderId,
+        now,
       );
     }
   }
@@ -3279,12 +3291,15 @@ const updateAccountBalancesOnCompletion = (orderId, isImported = false) => {
     return;
   }
   
+  const postedAt = ledgerTimestampForOrder(orderId, isImported);
+
   console.log(`[updateAccountBalancesOnCompletion] Order ${orderId} completion - Accounts:`, {
     buyAccountId: orderWithAccounts.buyAccountId,
     sellAccountId: orderWithAccounts.sellAccountId,
     amountBuy: orderWithAccounts.amountBuy,
     amountSell: orderWithAccounts.amountSell,
     isImported,
+    postedAt,
   });
   
   if (orderWithAccounts.buyAccountId) {
@@ -3305,7 +3320,7 @@ const updateAccountBalancesOnCompletion = (orderId, isImported = false) => {
         orderWithAccounts.buyAccountId,
         orderWithAccounts.amountBuy,
         description,
-        new Date().toISOString()
+        postedAt
       );
     }
   }
@@ -3341,7 +3356,7 @@ const updateAccountBalancesOnCompletion = (orderId, isImported = false) => {
         orderWithAccounts.sellAccountId,
         amountToDeduct,
         description,
-        new Date().toISOString()
+        postedAt
       );
     } else {
       console.warn(`Sell account ${orderWithAccounts.sellAccountId} not found`);
