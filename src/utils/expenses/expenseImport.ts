@@ -157,7 +157,7 @@ export async function processImportFile(
 ): Promise<{ expenses: ImportExpenseData[]; errors: string[] }> {
   // Read Excel file
   const data = await file.arrayBuffer();
-  const workbook = XLSX.read(data, { type: "array" });
+  const workbook = XLSX.read(data, { type: "array", cellDates: true });
 
   // Read Expenses sheet
   const expensesSheet = workbook.Sheets["Expenses"];
@@ -165,7 +165,7 @@ export async function processImportFile(
     throw new Error("Expenses sheet not found in the file");
   }
 
-  const expensesData = XLSX.utils.sheet_to_json(expensesSheet, { cellDates: true }) as any[];
+  const expensesData = XLSX.utils.sheet_to_json(expensesSheet) as any[];
 
   if (expensesData.length === 0) {
     throw new Error("No expenses found in the file");

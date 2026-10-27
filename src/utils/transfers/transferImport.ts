@@ -142,13 +142,9 @@ export function validateAndParseTransferRow(
     createdBy = userId;
   }
 
-  // Parse description (required). "-" is the old empty-cell placeholder.
+  // Parse description (optional). "-" is the old empty-cell placeholder.
   const descriptionRaw = String(row["Description"] || row["description"] || "").trim();
-  const description = descriptionRaw === "-" ? "" : descriptionRaw;
-  if (!description) {
-    errors.push(`Row ${rowNumber}: Description is required`);
-    return { success: false, errors };
-  }
+  const description = descriptionRaw && descriptionRaw !== "-" ? descriptionRaw : undefined;
 
   // Parse transaction fee (optional)
   const transactionFeeRaw = row["Transaction Fee"] ?? row["transactionFee"];
@@ -209,7 +205,7 @@ export async function processImportFile(
 ): Promise<{ transfers: ImportTransferData[]; errors: string[] }> {
   // Read Excel file
   const data = await file.arrayBuffer();
-  const workbook = XLSX.read(data, { type: "array" });
+  const workbook = XLSX.read(data, { type: "array", cellDates: true });
 
   // Read Transfers sheet
   const transfersSheet = workbook.Sheets["Transfers"];
@@ -217,7 +213,7 @@ export async function processImportFile(
     throw new Error("Transfers sheet not found in the file");
   }
 
-  const transfersData = XLSX.utils.sheet_to_json(transfersSheet, { cellDates: true }) as any[];
+  const transfersData = XLSX.utils.sheet_to_json(transfersSheet) as any[];
 
   if (transfersData.length === 0) {
     throw new Error("No transfers found in the file");
